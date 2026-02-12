@@ -1,0 +1,219 @@
+/* Whisk – 8×8 simultaneous tic-tac-toe variant */
+
+:root {
+  --bg: #1a1b26;
+  --surface: #24283b;
+  --text: #c0caf5;
+  --text-dim: #565f89;
+  --o-base: #7aa2f7;
+  --x-base: #f7768e;
+  --grid-line: #3b4261;
+  --cell-size: clamp(36px, 5vmin, 56px);
+  --font-sans: "DM Sans", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Lobby */
+.lobby {
+  text-align: center;
+  max-width: 360px;
+}
+
+.lobby input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--grid-line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.lobby input::placeholder {
+  color: var(--text-dim);
+}
+
+.lobby button {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--o-base);
+  color: var(--bg);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lobby button.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--grid-line);
+}
+
+.lobby .message {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.lobby .message.info {
+  background: rgba(122, 162, 247, 0.15);
+  color: var(--o-base);
+}
+
+.lobby .message.warning {
+  background: rgba(247, 118, 142, 0.15);
+  color: var(--x-base);
+}
+
+/* Game area */
+.game-area {
+  display: none;
+  align-items: center;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.game-area.visible {
+  display: flex;
+}
+
+.scores {
+  display: flex;
+  gap: 2rem;
+  font-size: 1.1rem;
+}
+
+.scores span {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+}
+
+.scores .score-o {
+  background: rgba(122, 162, 247, 0.2);
+  color: var(--o-base);
+}
+
+.scores .score-x {
+  background: rgba(247, 118, 142, 0.2);
+  color: var(--x-base);
+}
+
+.board-wrap {
+  padding: 8px;
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, var(--cell-size));
+  grid-template-rows: repeat(8, var(--cell-size));
+  gap: 2px;
+  background: var(--grid-line);
+  border: 2px solid var(--grid-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cell {
+  width: var(--cell-size);
+  height: var(--cell-size);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s;
+}
+
+.cell:hover:not(.occupied) {
+  background: #2f3349;
+}
+
+.cell.occupied {
+  cursor: default;
+}
+
+.cell .piece {
+  font-size: calc(var(--cell-size) * 0.65);
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* O: blue with saturation levels (age) */
+.cell .piece.o { color: var(--o-base); }
+.cell .piece.o.sat-100 { filter: saturate(1); opacity: 1; }
+.cell .piece.o.sat-80  { filter: saturate(0.8); opacity: 0.95; }
+.cell .piece.o.sat-60  { filter: saturate(0.6); opacity: 0.9; }
+.cell .piece.o.sat-40  { filter: saturate(0.4); opacity: 0.85; }
+.cell .piece.o.sat-20  { filter: saturate(0.2); opacity: 0.75; }
+
+/* X: red with saturation levels (age) */
+.cell .piece.x { color: var(--x-base); }
+.cell .piece.x.sat-100 { filter: saturate(1); opacity: 1; }
+.cell .piece.x.sat-80  { filter: saturate(0.8); opacity: 0.95; }
+.cell .piece.x.sat-60  { filter: saturate(0.6); opacity: 0.9; }
+.cell .piece.x.sat-40  { filter: saturate(0.4); opacity: 0.85; }
+.cell .piece.x.sat-20  { filter: saturate(0.2); opacity: 0.75; }
+
+.status {
+  min-height: 2rem;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.status.error {
+  color: var(--x-base);
+}
+
+.game-over {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 0.5rem;
+}
+
+.hidden {
+  display: none !important;
+}
