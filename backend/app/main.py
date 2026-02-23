@@ -1,0 +1,278 @@
+"""FastAPI server for Simul-Tac.
+
+Server responsibilities:
+- Accept move reservations for each player.
+- Reveal/apply both moves only when both players have moved (commit).
+- Keep game-over state once a player reaches 50+ points.
+- Broadcast authoritative state snapshots to clients.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocketState
+
+from .game import (
+    GameState,
+    Mark,
+    apply_move,
+    commit_turn,
+    pieces_for_client,
+    ready_to_commit,
+)
+
+# -------------------------------------------------------------------
+
+@dataclass
+class PlayerConn:
+    ws: WebSocket
+    name: str
+    mark: Mark
+
+
+class GameManager:
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset_game_state_only(self) -> None:
+        """Clear board/scores/turn/pending but keep players + mode."""
+        self.state = GameState()
+        self.game_over = False
+
+    def reset(self) -> None:
+        self.state = GameState()
+        self.players: Dict[Mark, PlayerConn] = {}
+        self.ws_to_mark: Dict[str, Mark] = {}
+        self.mode: Optional[str] = None  # 'remote' or 'local'
+        self.game_over = False
+        self.game_id = str(uuid.uuid4())
+
+    def is_full(self) -> bool:
+        return Mark.O in self.players and Mark.X in self.players
+
+    async def send(self, ws: WebSocket, payload: dict) -> None:
+        await ws.send_text(json.dumps(payload))
+
+    async def broadcast(self, payload: dict) -> None:
+        for p in self.players.values():
+            await self.send(p.ws, payload)
+
+    def assign_mark(self) -> Mark:
+        """First joiner is O, second is X."""
+        if Mark.O not in self.players:
+            return Mark.O
+        return Mark.X
+
+    def prune_disconnected(self) -> None:
+        """Remove players whose websocket is no longer connected (crash/refresh ghosts)."""
+        for mark, p in list(self.players.items()):
+            if p.ws.client_state != WebSocketState.CONNECTED:
+                del self.players[mark]
+                self.state.pending[mark] = None
+
+
+# -------------------------------------------------------------------
+
+app = FastAPI(title="Simul-Tac")
+manager = GameManager()
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
+# Serve frontend assets from repo frontend directory.
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+
+@app.get("/")
+async def index() -> HTMLResponse:
+    with open(FRONTEND_DIR / "index.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
+async def send_state(to_ws: WebSocket) -> None:
+    """Send a full state snapshot to one client."""
+    payload = {
+        "type": "state",
+        "turn": manager.state.turn,
+        "pieces": pieces_for_client(manager.state),
+        "scores": {
+            "O": manager.state.scores[Mark.O],
+            "X": manager.state.scores[Mark.X],
+        },
+        # frontend uses these booleans for messaging
+        "pending": {
+            "O": manager.state.pending[Mark.O] is not None,
+            "X": manager.state.pending[Mark.X] is not None,
+        },
+        "mode": manager.mode,
+        "players": {
+            "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
+            "X": manager.players[Mark.X].name if Mark.X in manager.players else None,
+        },
+        "game_over": manager.game_over,
+    }
+    await to_ws.send_text(json.dumps(payload))
+
+
+async def broadcast_state() -> None:
+    """Send a full state snapshot to all connected clients."""
+    for p in manager.players.values():
+        await send_state(p.ws)
+
+
+def game_over_message(winner: Optional[str]) -> str:
+    if winner == "O":
+        return "Game over. O wins!"
+    if winner == "X":
+        return "Game over. X wins!"
+    return "Game over. It's a tie!"
+
+
+# -------------------------------------------------------------------
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket) -> None:
+    await ws.accept()
+    ws_id = str(uuid.uuid4())
+
+    try:
+        while True:
+            raw = await ws.receive_text()
+            msg = json.loads(raw)
+            mtype = msg.get("type")
+
+            # --------------- JOIN ---------------
+            if mtype == "join":
+                name = (msg.get("name") or "").strip() or "Player"
+
+                manager.prune_disconnected()
+
+                if manager.is_full():
+                    await manager.send(ws, {
+                        "type": "error",
+                        "message": "A game is already in progress with two players.",
+                    })
+                    continue
+
+                mark = manager.assign_mark()
+
+                # First player (O) may request a mode (or leave None)
+                if mark == Mark.O:
+                    requested_mode = msg.get("mode")
+                    if requested_mode in ("remote", "local"):
+                        manager.mode = requested_mode
+
+                manager.players[mark] = PlayerConn(ws=ws, name=name, mark=mark)
+                manager.ws_to_mark[ws_id] = mark
+
+                await manager.send(ws, {"type": "joined", "mark": mark.value})
+                await broadcast_state()
+
+                if mark == Mark.O and manager.mode is None:
+                    await manager.send(ws, {"type": "need_mode", "message": "Choose Local or Remote."})
+
+            # --------------- SET MODE ---------------
+            elif mtype == "set_mode":
+                mark = manager.ws_to_mark.get(ws_id)
+                if mark != Mark.O:
+                    await manager.send(ws, {"type": "error", "message": "Only O can set mode."})
+                    continue
+
+                mode = msg.get("mode")
+                if mode not in ("remote", "local"):
+                    await manager.send(ws, {"type": "error", "message": "Mode must be local or remote."})
+                    continue
+
+                manager.mode = mode
+                await manager.broadcast({"type": "mode", "mode": mode})
+                if mode == "local":
+                    await manager.broadcast({
+                        "type": "info",
+                        "message": "Local mode currently uses the same two-player server flow as remote mode.",
+                    })
+                await broadcast_state()
+
+            # --------------- MOVE ---------------
+            elif mtype == "move":
+                mark = manager.ws_to_mark.get(ws_id)
+                if mark is None or mark not in manager.players:
+                    await manager.send(ws, {"type": "error", "message": "You must join first."})
+                    continue
+
+                if manager.game_over:
+                    await manager.send(ws, {"type": "error", "message": "Game is over. Start a new game."})
+                    continue
+
+                if not manager.is_full():
+                    await manager.send(ws, {"type": "error", "message": "Waiting for second player."})
+                    continue
+
+                row = int(msg.get("row"))
+                col = int(msg.get("col"))
+
+                try:
+                    apply_move(manager.state, mark, row, col)
+                except ValueError as e:
+                    await manager.send(ws, {"type": "invalid_move", "message": str(e)})
+                    continue
+
+                # Update both players' "who has moved?" message logic.
+                await manager.broadcast({
+                    "type": "pending_flags",
+                    "pending": {
+                        "O": manager.state.pending[Mark.O] is not None,
+                        "X": manager.state.pending[Mark.X] is not None,
+                    },
+                })
+
+                # Reveal/apply when both players have reserved a move.
+                if ready_to_commit(manager.state):
+                    summary = commit_turn(manager.state)
+                    await broadcast_state()
+                    await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
+                    if summary["done"]:
+                        manager.game_over = True
+                        winner = summary.get("winner")
+                        winner_mark = winner if isinstance(winner, str) else None
+                        await manager.broadcast({
+                            "type": "game_over",
+                            "message": game_over_message(winner_mark),
+                        })
+
+            # --------------- NEW GAME ---------------
+            elif mtype == "new_game":
+                mark = manager.ws_to_mark.get(ws_id)
+                if mark is None or mark not in manager.players:
+                    await manager.send(ws, {"type": "error", "message": "You must join first."})
+                    continue
+
+                resetter_name = manager.players[mark].name
+                manager.reset_game_state_only()
+
+                # Inform both players
+                for m, p in manager.players.items():
+                    if m == mark:
+                        await manager.send(p.ws, {"type": "info", "message": "You have reset the game."})
+                    else:
+                        await manager.send(p.ws, {"type": "info", "message": f"{resetter_name} has reset the game."})
+
+                await broadcast_state()
+
+            else:
+                await manager.send(ws, {"type": "error", "message": f"Unknown message type: {mtype}"})
+
+    except WebSocketDisconnect:
+        mark = manager.ws_to_mark.pop(ws_id, None)
+        if mark and mark in manager.players:
+            del manager.players[mark]
+            manager.state.pending[mark] = None
+            await broadcast_state()
+
+        if not manager.players:
+            manager.reset()

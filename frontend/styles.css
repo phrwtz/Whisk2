@@ -1,0 +1,140 @@
+:root{
+  --bg:#f4f6f8;
+  --card:#ffffff;
+  --text:#0b1020;
+  --muted:#5b647a;
+  --grid:#d9deea;
+}
+
+*{ box-sizing:border-box; }
+
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+
+header{
+  padding:16px;
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:12px;
+}
+
+header h1{ margin:0; font-size:20px; }
+#status{ color:var(--muted); font-size:14px; }
+
+main{ padding:0 16px 24px; max-width:980px; margin:0 auto; }
+
+.card{
+  background:var(--card);
+  border:1px solid #e2e6f2;
+  border-radius:16px;
+  padding:16px;
+  margin:0 16px 16px;
+  box-shadow:0 6px 18px rgba(0,0,0,0.08);
+}
+
+.top-row{
+  position:sticky;
+  top:0;
+  z-index:50;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin:0 16px 16px;
+  padding-top:12px;
+  background:var(--bg);
+}
+
+.top-row .card{ margin:0; }
+
+#scoresCard h2, #messagesCard h2{
+  margin:0 0 10px 0;
+  font-size:16px;
+}
+
+.scoresText{
+  line-height:1.6;
+  font-size:14px;
+}
+
+.messages{
+  min-height:72px;
+  color:var(--muted);
+  white-space:pre-wrap;
+  line-height:1.4;
+  font-size:14px;
+}
+
+.hidden{ display:none; }
+
+label{ display:block; margin:8px 0 12px; }
+
+input{
+  width:100%;
+  margin-top:6px;
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid #cfd6e6;
+  background:#ffffff;
+  color:#0b1020;
+}
+
+button.ui-btn{
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid #cfd6e6;
+  background:#e6ebf7;
+  color:#0b1020;
+  cursor:pointer;
+  margin-right:8px;
+  transition:background 0.15s ease;
+}
+
+button.ui-btn:hover{ background:#d8def0; }
+
+.hint{ color:var(--muted); font-size:13px; margin-top:8px; }
+
+.board{
+  display:grid;
+  grid-template-columns:repeat(8, 1fr);
+  gap:5px;
+  width:min(440px, 88vmin);
+  margin:0 auto;
+  background:var(--grid);
+  padding:8px;
+  border-radius:14px;
+}
+
+button.cell{
+  appearance:none;
+  -webkit-appearance:none;
+  width:100%;
+  aspect-ratio:1 / 1;
+  border-radius:10px;
+  border:1px solid #cfd6e6;
+  background-color:#ffffff;
+  padding:0;
+  margin:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:clamp(28px, 6vmin, 44px);
+  line-height:1;
+  font-weight:800;
+  color:var(--text);
+  cursor:pointer;
+  user-select:none;
+}
+
+button.cell:hover{ background:#eef1fa; outline:2px solid rgba(255,255,255,0.18); }
+
+.cell:disabled{
+  background-color:#ffffff;
+  opacity:1;
+}
+
+.cell:focus{ outline:none; }

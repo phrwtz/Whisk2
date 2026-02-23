@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Simul-Tac (8x8)</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Simul-Tac</h1>
+    <div id="status">Connecting…</div>
+  </header>
+
+  <section id="setup" class="card">
+    <h2>Join game</h2>
+
+    <label>
+      Your name
+      <input id="nameInput" placeholder="e.g., Paul" />
+    </label>
+
+    <div id="modePicker" class="hidden">
+      <p><strong>Host:</strong> Choose how you want to play.</p>
+      <button id="localBtn" class="ui-btn" type="button">Local (one computer)</button>
+      <button id="remoteBtn" class="ui-btn" type="button">Remote (two computers)</button>
+    </div>
+
+    <button id="joinBtn" class="ui-btn" type="button">Join</button>
+    <p class="hint">Two-computer game: both players open the same URL.</p>
+  </section>
+
+  <main class="hidden" id="game">
+    <div class="top-row">
+      <section class="card" id="scoresCard">
+        <h2>Scores</h2>
+        <div id="scores" class="scoresText"></div>
+        <button class="ui-btn" id="newGameBtn" type="button">New Game</button>
+      </section>
+
+      <section class="card" id="messagesCard">
+        <h2>Messages</h2>
+        <div id="messages" class="messages"></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div id="board" class="board" aria-label="game board"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
