@@ -1,4 +1,4 @@
-# Simul-Tac (8x8 simultaneous tic‑tac‑toe variant)
+# Whisk (8x8 simultaneous tic‑tac‑toe variant)
 
 This is a 2‑player web board game inspired by tic‑tac‑toe, with:
 
@@ -93,8 +93,8 @@ pytest -q
 1. Each player clicks a square.
 2. The server validates the move:
    - if the square is already occupied (by an existing piece) or **reserved** this turn, the move is rejected.
-3. Pending moves are hidden from both players until the turn commits.
-4. When both moves are accepted, the server **commits the turn**, applies both moves, updates scores, and broadcasts the updated board to both players.
+3. After the first valid move, only the mover sees a private preview of their own pending piece (with aging/score preview). The opponent sees no board or score change yet.
+4. When both moves are accepted, the server **commits the turn**, applies both moves, updates running totals, and broadcasts the same updated board/scores to both players.
 
 Turn lifecycle is: `reserve -> wait -> commit -> reveal`.
 

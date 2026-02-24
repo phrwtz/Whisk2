@@ -1,4 +1,4 @@
-"""Game rules and state for the 8x8 'Simul-Tac' game.
+"""Game rules and state for the 8x8 'Whisk' game.
 
 This module is intentionally UI-agnostic: it doesn't know about browsers,
 websockets, or HTML. That makes it easy to unit-test.
@@ -62,12 +62,14 @@ class GameState:
         default_factory=lambda: {Mark.O: deque(), Mark.X: deque()}
     )
     scores: Dict[Mark, int] = field(default_factory=lambda: {Mark.O: 0, Mark.X: 0})
-
+    
     # Pending (not-yet-revealed) moves for the current turn.
     # The server layer uses this to enforce simultaneous placement.
     pending: Dict[Mark, Optional[Coord]] = field(
         default_factory=lambda: {Mark.O: None, Mark.X: None}
     )
+    last_highlighted_cells: Set[Coord] = field(default_factory=set)
+    highlight_visible_for: Set[Mark] = field(default_factory=lambda: {Mark.O, Mark.X})
 
     def board_occupancy(self) -> Dict[Coord, Mark]:
         """Return a mapping of occupied squares to marks."""
@@ -99,6 +101,58 @@ def _window_cells(start: Coord, dr: int, dc: int, length: int) -> List[Coord]:
     return [(sr + i * dr, sc + i * dc) for i in range(length)]
 
 
+def _scoring_line_windows(
+    occ: Dict[Coord, Mark], mark: Mark, length: int
+) -> List[List[Coord]]:
+    """Return all "exact" lines of `length` for `mark`."""
+    windows: List[List[Coord]] = []
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            for dr, dc in DIRECTIONS:
+                cells = _window_cells((r, c), dr, dc, length)
+                if not all(in_bounds(rr, cc) for rr, cc in cells):
+                    continue
+                if not all(occ.get((rr, cc)) == mark for rr, cc in cells):
+                    continue
+
+                br, bc = r - dr, c - dc
+                ar, ac = r + length * dr, c + length * dc
+                before_ok = (not in_bounds(br, bc)) or (occ.get((br, bc)) != mark)
+                after_ok = (not in_bounds(ar, ac)) or (occ.get((ar, ac)) != mark)
+                if before_ok and after_ok:
+                    windows.append(cells)
+    return windows
+
+
+def scoring_coords_for_mark(occ: Dict[Coord, Mark], mark: Mark) -> Set[Coord]:
+    """Return the set of coords that contribute to scoring lines for `mark`."""
+    coords: Set[Coord] = set()
+    for length in (3, 4, 5):
+        for line in _scoring_line_windows(occ, mark, length):
+            coords.update(line)
+    return coords
+
+
+def scoring_coords_for_board(occ: Dict[Coord, Mark]) -> Set[Coord]:
+    """Return the set of scoring coords for both players combined."""
+    coords: Set[Coord] = set()
+    for mark in (Mark.O, Mark.X):
+        coords.update(scoring_coords_for_mark(occ, mark))
+    return coords
+
+
+def scoring_coords_for_pending_move(
+    occ: Dict[Coord, Mark], mark: Mark, pending_coord: Coord
+) -> Set[Coord]:
+    """Return scoring coords for lines that include the pending move."""
+    coords: Set[Coord] = set()
+    for length in (3, 4, 5):
+        for line in _scoring_line_windows(occ, mark, length):
+            if pending_coord in line:
+                coords.update(line)
+    return coords
+
+
 def count_exact_lines(occ: Dict[Coord, Mark], mark: Mark, length: int) -> int:
     """Count lines of exactly `length` for `mark`.
 
@@ -111,24 +165,7 @@ def count_exact_lines(occ: Dict[Coord, Mark], mark: Mark, length: int) -> int:
 
     This prevents counting a 4-in-a-row as two 3-in-a-rows, etc.
     """
-    total = 0
-    for r in range(BOARD_SIZE):
-        for c in range(BOARD_SIZE):
-            for dr, dc in DIRECTIONS:
-                cells = _window_cells((r, c), dr, dc, length)
-                if not all(in_bounds(rr, cc) for rr, cc in cells):
-                    continue
-                if not all(occ.get((rr, cc)) == mark for rr, cc in cells):
-                    continue
-
-                # Check the cell before and after the window
-                br, bc = r - dr, c - dc
-                ar, ac = r + length * dr, c + length * dc
-                before_ok = (not in_bounds(br, bc)) or (occ.get((br, bc)) != mark)
-                after_ok = (not in_bounds(ar, ac)) or (occ.get((ar, ac)) != mark)
-                if before_ok and after_ok:
-                    total += 1
-    return total
+    return len(_scoring_line_windows(occ, mark, length))
 
 
 def score_for_board(occ: Dict[Coord, Mark], mark: Mark) -> int:
@@ -137,6 +174,79 @@ def score_for_board(occ: Dict[Coord, Mark], mark: Mark) -> int:
     fours = count_exact_lines(occ, mark, 4)
     fives = count_exact_lines(occ, mark, 5)
     return threes * 1 + fours * 4 + fives * 9
+
+
+def _view_piece_queues(
+    state: GameState, viewer_mark: Optional[Mark] = None
+) -> Dict[Mark, Deque[Piece]]:
+    """Return per-player piece queues from a single viewer's perspective.
+
+    Committed pieces are always included. If `viewer_mark` has a pending move,
+    include that pending move only for that viewer, applying the same 5-piece
+    cap behavior the viewer would see after the move.
+    """
+    view: Dict[Mark, Deque[Piece]] = {
+        Mark.O: deque(state.pieces[Mark.O]),
+        Mark.X: deque(state.pieces[Mark.X]),
+    }
+
+    if viewer_mark is None:
+        return view
+
+    pending = state.pending[viewer_mark]
+    if pending is None:
+        return view
+
+    row, col = pending
+    view_piece = Piece(mark=viewer_mark, row=row, col=col, turn_placed=state.turn)
+    view[viewer_mark].append(view_piece)
+    while len(view[viewer_mark]) > MAX_PIECES_PER_PLAYER:
+        view[viewer_mark].popleft()
+    return view
+
+
+def _occupancy_from_queues(pieces: Dict[Mark, Deque[Piece]]) -> Dict[Coord, Mark]:
+    occ: Dict[Coord, Mark] = {}
+    for mark, dq in pieces.items():
+        for p in dq:
+            occ[(p.row, p.col)] = mark
+    return occ
+
+
+def scores_for_client(state: GameState, viewer_mark: Optional[Mark] = None) -> Dict[Mark, int]:
+    """Return scores as seen by a specific viewer.
+
+    Scores are the committed running totals, plus a private preview for the
+    viewer's own pending move (if any). The opponent's pending move is never
+    included in this preview.
+    """
+    scores = {Mark.O: state.scores[Mark.O], Mark.X: state.scores[Mark.X]}
+    if viewer_mark is None or state.pending[viewer_mark] is None:
+        return scores
+
+    view_queues = _view_piece_queues(state, viewer_mark)
+    view_occ = _occupancy_from_queues(view_queues)
+    scores[viewer_mark] += score_for_board(view_occ, viewer_mark)
+    return scores
+
+
+def highlight_coords_for_viewer(
+    state: GameState, viewer_mark: Optional[Mark] = None
+) -> Set[Coord]:
+    """Return highlight coords that should be visible to a specific viewer."""
+    if viewer_mark is None:
+        return set()
+
+    pending = state.pending[viewer_mark]
+    if pending is not None:
+        view_queues = _view_piece_queues(state, viewer_mark)
+        view_occ = _occupancy_from_queues(view_queues)
+        return scoring_coords_for_pending_move(view_occ, viewer_mark, pending)
+
+    if viewer_mark in state.highlight_visible_for:
+        return set(state.last_highlighted_cells)
+
+    return set()
 
 
 def apply_move(state: GameState, mark: Mark, row: int, col: int) -> None:
@@ -166,6 +276,7 @@ def apply_move(state: GameState, mark: Mark, row: int, col: int) -> None:
 
     # Reserve this move. The piece is materialized at commit time.
     state.pending[mark] = (row, col)
+    state.highlight_visible_for.discard(mark)
 
 
 def ready_to_commit(state: GameState) -> bool:
@@ -206,6 +317,8 @@ def commit_turn(state: GameState) -> Dict[str, object]:
     add_x = score_for_board(occ, Mark.X)
     state.scores[Mark.O] += add_o
     state.scores[Mark.X] += add_x
+    state.last_highlighted_cells = scoring_coords_for_board(occ)
+    state.highlight_visible_for = {Mark.O, Mark.X}
 
     done = state.scores[Mark.O] >= 50 or state.scores[Mark.X] >= 50
     winner: Optional[str] = None
@@ -229,15 +342,21 @@ def commit_turn(state: GameState) -> Dict[str, object]:
     }
 
 
-def pieces_for_client(state: GameState) -> List[Dict[str, object]]:
-    """Return all committed pieces with an 'age_rank' 0..4 (0 = newest).
+def pieces_for_client(
+    state: GameState, viewer_mark: Optional[Mark] = None
+) -> List[Dict[str, object]]:
+    """Return pieces with an 'age_rank' 0..4 (0 = newest).
 
     The client uses this to set saturation:
       age_rank 0 => 100%, 1=>80%, 2=>60%, 3=>40%, 4=>20%
+
+    If `viewer_mark` has a pending move, include that pending move only for
+    that viewer.
     """
     out: List[Dict[str, object]] = []
+    view = _view_piece_queues(state, viewer_mark)
     for mark in (Mark.O, Mark.X):
-        dq = state.pieces[mark]
+        dq = view[mark]
         # dq is oldest->newest, so reverse enumerate for age_rank.
         for idx_from_oldest, p in enumerate(dq):
             age_rank = len(dq) - 1 - idx_from_oldest

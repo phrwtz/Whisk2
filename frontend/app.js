@@ -1,5 +1,5 @@
 /*
-Client-side app for Simul-Tac.
+Client-side app for Whisk.
 
 Frontend responsibilities:
 - Connect to server via WebSocket
@@ -40,6 +40,8 @@ let pendingFlags = { O: false, X: false }; // backend sends booleans
 
 let serverPieces = []; // array of {row,col,mark,age_rank}
 let isGameOver = false;
+const HIGHLIGHT_COLOR = '#ffe2b4';
+let highlightedCells = new Set();
 
 let lastKnownPlayers = { O: null, X: null };
 let opponentJoinAnnounced = false;
@@ -85,14 +87,18 @@ function computeTurnMessage() {
   if (!myMark) return 'Not joined yet.';
   if (isGameOver) return 'Game over. Start a new game to play again.';
 
-  const oName = playerName('O', 'Player 1');
-  const xName = playerName('X', 'Player 2');
+  const oName = playerName('O', 'first player');
+  const xName = playerName('X', 'second player');
 
   const youName = (myMark === 'O') ? oName : xName;
   const oppName = (myMark === 'O') ? xName : oName;
 
   const oppPresent = (myMark === 'O') ? !!players?.X : !!players?.O;
   if (!oppPresent) {
+    const youMoved = (myMark === 'O') ? !!pendingFlags.O : !!pendingFlags.X;
+    if (youMoved) {
+      return "Waiting for second player's move.";
+    }
     return `Welcome ${youName}! We're waiting for the second player to join the game.`;
   }
 
@@ -103,7 +109,7 @@ function computeTurnMessage() {
     return `It's your move ${youName}, ${oppName} hasn't moved yet.`;
   }
   if (!youMoved && oppMoved) {
-    return `${oppName} has moved. Waiting for you.`;
+    return `It's your move ${youName}, ${oppName} has made his move.`;
   }
   if (youMoved && !oppMoved) {
     return `Waiting for ${oppName}'s move.`;
@@ -111,17 +117,25 @@ function computeTurnMessage() {
   return `Both moves received.`;
 }
 
-function satForAgeRank(ageRank) {
-  // age_rank 0..4 => 100,80,60,40,20
-  const mapping = [100, 80, 60, 40, 20];
-  if (ageRank < 0 || ageRank > 4) return 100;
+function lightnessForAgeRank(ageRank) {
+  // age_rank 0..4 => darker to lighter
+  const mapping = [35, 55, 70, 82, 90];
+  if (ageRank < 0 || ageRank > 4) return 35;
   return mapping[ageRank];
 }
 
-function markColor(mark, sat) {
-  // Use HSL so we can control saturation precisely.
-  if (mark === 'O') return `hsl(210, ${sat}%, 55%)`; // blue
-  return `hsl(0, ${sat}%, 55%)`; // red
+function markColor(mark, ageRank) {
+  // Keep icons visible while getting lighter with age.
+  const lightness = lightnessForAgeRank(ageRank);
+  if (mark === 'O') return `hsl(210, 100%, ${lightness}%)`; // blue
+  return `hsl(0, 100%, ${lightness}%)`; // red
+}
+
+function squareBgForAgeRank(ageRank) {
+  // Same green hue; lighter and lighter until white.
+  if (ageRank >= 4) return '#ffffff';
+  const lightness = Math.min(lightnessForAgeRank(ageRank) + 15, 96);
+  return `hsl(120, 60%, ${lightness}%)`;
 }
 
 function createBoard() {
@@ -146,6 +160,7 @@ function render() {
   cells.forEach((cell) => {
     cell.textContent = '';
     cell.style.color = '';
+    cell.style.backgroundColor = '';
     cell.disabled = false;
   });
 
@@ -155,9 +170,14 @@ function render() {
     const cell = cells[idx];
     if (!cell) continue;
 
-    const sat = satForAgeRank(p.age_rank);
     cell.textContent = p.mark;
-    cell.style.color = markColor(p.mark, sat);
+    cell.style.color = markColor(p.mark, p.age_rank);
+    const highlightKey = `${p.row},${p.col}`;
+    if (highlightedCells.has(highlightKey)) {
+      cell.style.backgroundColor = HIGHLIGHT_COLOR;
+    } else {
+      cell.style.backgroundColor = squareBgForAgeRank(p.age_rank);
+    }
     cell.disabled = true;
   }
 
@@ -252,13 +272,23 @@ function handleMessage(msg) {
         O: !!msg.pending?.O,
         X: !!msg.pending?.X,
       };
+      const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
+      const youMoved = (myMark === 'O') ? !!pendingFlags.O : !!pendingFlags.X;
+      const oppMoved = (myMark === 'O') ? !!pendingFlags.X : !!pendingFlags.O;
+      if (!youMoved && oppMoved) {
+        setStatusMessage(`${oppName} has moved. Waiting for you!`);
+        break;
+      }
       setStatusMessage(computeTurnMessage());
       break;
 
     case 'turn_committed':
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
-      setStatusMessage('Turn committed. Make your next move.');
+      if (myMark) {
+        const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
+        setStatusMessage(`Waiting for you to make your next move. ${oppName} hasn't moved yet.`);
+      }
       break;
 
     case 'game_over':
@@ -310,6 +340,11 @@ function handleMessage(msg) {
       }
 
       setScoresUI();
+
+      highlightedCells = new Set();
+      if (Array.isArray(msg.highlight)) {
+        msg.highlight.forEach((coord) => highlightedCells.add(`${coord.row},${coord.col}`));
+      }
 
       // Don’t overwrite explicit server info messages like “X has joined” or “You reset”
       // unless we’re in normal play flow.

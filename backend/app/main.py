@@ -1,4 +1,4 @@
-"""FastAPI server for Simul-Tac.
+"""FastAPI server for Whisk.
 
 Server responsibilities:
 - Accept move reservations for each player.
@@ -25,8 +25,10 @@ from .game import (
     Mark,
     apply_move,
     commit_turn,
+    highlight_coords_for_viewer,
     pieces_for_client,
     ready_to_commit,
+    scores_for_client,
 )
 
 # -------------------------------------------------------------------
@@ -54,6 +56,7 @@ class GameManager:
         self.mode: Optional[str] = None  # 'remote' or 'local'
         self.game_over = False
         self.game_id = str(uuid.uuid4())
+        self.reset_on_next_join = False
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -81,7 +84,7 @@ class GameManager:
 
 # -------------------------------------------------------------------
 
-app = FastAPI(title="Simul-Tac")
+app = FastAPI(title="Whisk")
 manager = GameManager()
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -95,15 +98,16 @@ async def index() -> HTMLResponse:
         return HTMLResponse(f.read())
 
 
-async def send_state(to_ws: WebSocket) -> None:
+async def send_state(to_ws: WebSocket, viewer_mark: Optional[Mark] = None, refresh: bool = False) -> None:
     """Send a full state snapshot to one client."""
+    view_scores = scores_for_client(manager.state, viewer_mark)
     payload = {
         "type": "state",
         "turn": manager.state.turn,
-        "pieces": pieces_for_client(manager.state),
+        "pieces": pieces_for_client(manager.state, viewer_mark),
         "scores": {
-            "O": manager.state.scores[Mark.O],
-            "X": manager.state.scores[Mark.X],
+            "O": view_scores[Mark.O],
+            "X": view_scores[Mark.X],
         },
         # frontend uses these booleans for messaging
         "pending": {
@@ -116,14 +120,19 @@ async def send_state(to_ws: WebSocket) -> None:
             "X": manager.players[Mark.X].name if Mark.X in manager.players else None,
         },
         "game_over": manager.game_over,
+        "refresh": refresh,
     }
+    highlight_coords = highlight_coords_for_viewer(manager.state, viewer_mark)
+    payload["highlight"] = [
+        {"row": r, "col": c} for r, c in sorted(highlight_coords)
+    ]
     await to_ws.send_text(json.dumps(payload))
 
 
-async def broadcast_state() -> None:
+async def broadcast_state(refresh: bool = False) -> None:
     """Send a full state snapshot to all connected clients."""
     for p in manager.players.values():
-        await send_state(p.ws)
+        await send_state(p.ws, p.mark, refresh=refresh)
 
 
 def game_over_message(winner: Optional[str]) -> str:
@@ -159,6 +168,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         "message": "A game is already in progress with two players.",
                     })
                     continue
+
+                if manager.reset_on_next_join:
+                    manager.reset_game_state_only()
+                    manager.reset_on_next_join = False
 
                 mark = manager.assign_mark()
 
@@ -209,10 +222,6 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await manager.send(ws, {"type": "error", "message": "Game is over. Start a new game."})
                     continue
 
-                if not manager.is_full():
-                    await manager.send(ws, {"type": "error", "message": "Waiting for second player."})
-                    continue
-
                 row = int(msg.get("row"))
                 col = int(msg.get("col"))
 
@@ -221,6 +230,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 except ValueError as e:
                     await manager.send(ws, {"type": "invalid_move", "message": str(e)})
                     continue
+
+                # Show the mover their private preview immediately.
+                await send_state(ws, mark)
 
                 # Update both players' "who has moved?" message logic.
                 await manager.broadcast({
@@ -234,7 +246,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 # Reveal/apply when both players have reserved a move.
                 if ready_to_commit(manager.state):
                     summary = commit_turn(manager.state)
-                    await broadcast_state()
+                    await broadcast_state(refresh=True)
                     await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
                     if summary["done"]:
                         manager.game_over = True
@@ -254,6 +266,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                 resetter_name = manager.players[mark].name
                 manager.reset_game_state_only()
+                manager.reset_on_next_join = False
 
                 # Inform both players
                 for m, p in manager.players.items():
@@ -273,6 +286,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
             del manager.players[mark]
             manager.state.pending[mark] = None
             await broadcast_state()
+            manager.reset_on_next_join = True
 
         if not manager.players:
             manager.reset()
