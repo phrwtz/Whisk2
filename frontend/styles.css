@@ -266,36 +266,44 @@ input {
 
 .move-hand {
   position: fixed;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 32px;
+  width: 64px;
+  height: 64px;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
 }
 
 .move-hand-emoji {
+  position: absolute;
+  left: 8px;
+  top: 10px;
+  font-size: 44px;
   line-height: 1;
 }
 
+.move-hand-X .move-hand-emoji {
+  transform: scaleX(-1);
+}
+
 .move-hand-token {
-  display: inline-grid;
+  position: absolute;
+  left: 40px;
+  top: 16px;
+  display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   border: 2px solid #1f2937;
   background: #ffffff;
   font-weight: 800;
-  font-size: 20px;
+  font-size: 12px;
   line-height: 1;
-  transform: translateY(-2px);
 }
 
 .move-hand-token-O { color: var(--o-color); }
 .move-hand-token-X { color: var(--x-color); }
 
 .move-hand.dropping .move-hand-token {
-  transform: translateY(10px) scale(0.95);
+  transform: translateY(10px) scale(0.9);
   transition: transform 140ms ease-in;
 }
 

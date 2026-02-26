@@ -284,7 +284,7 @@ function animateMoveDrop(mark, row, col) {
   const hand = document.createElement('div');
   hand.className = `move-hand move-hand-${mark}`;
   hand.innerHTML =
-    `<span class="move-hand-emoji">${mark === 'O' ? '🤚' : '✋'}</span>` +
+    `<span class="move-hand-emoji">🤏</span>` +
     `<span class="move-hand-token move-hand-token-${mark}">${mark}</span>`;
   layer.appendChild(hand);
   document.body.appendChild(layer);
