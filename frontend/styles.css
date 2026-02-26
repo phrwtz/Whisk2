@@ -145,6 +145,43 @@ input {
 .msg-player-o { color: var(--o-color); font-weight: 700; }
 .msg-player-x { color: var(--x-color); font-weight: 700; }
 
+.play-area {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin: 0 12px;
+}
+
+@media (min-width: 980px) {
+  .play-area {
+    grid-template-columns: 320px minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+#instructionsCard {
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.55), transparent 42%),
+    #fff8e8;
+  border: 3px solid #c68252;
+}
+
+#instructionsCard h3 {
+  margin: 10px 0 6px;
+  font-size: 16px;
+}
+
+#instructionsCard ul {
+  margin: 0 0 8px 18px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+#instructionsCard li {
+  margin-bottom: 4px;
+}
+
 .board {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
@@ -155,6 +192,10 @@ input {
   background: var(--board-gap);
   border: 3px solid var(--board-line);
   border-radius: 14px;
+}
+
+#boardCard {
+  margin: 10px 0;
 }
 
 .cell {

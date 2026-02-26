@@ -43,9 +43,32 @@
       </section>
     </div>
 
-    <section class="card">
-      <div id="board" class="board" aria-label="game board"></div>
-    </section>
+    <div class="play-area">
+      <section class="card" id="instructionsCard">
+        <h2>How To Play</h2>
+        <h3>Remote (two computers)</h3>
+        <ul>
+          <li>Player 1 joins first and chooses Remote mode.</li>
+          <li>Player 2 joins from the same URL.</li>
+          <li>Both players choose a square each turn.</li>
+          <li>Moves reveal together when both have moved.</li>
+          <li>Build 3, 4, or 5 in a row to score points.</li>
+        </ul>
+
+        <h3>Local (one computer)</h3>
+        <ul>
+          <li>Player 1 joins and chooses Local mode.</li>
+          <li>One device alternates turns: O, then X, then O, etc.</li>
+          <li>Each click commits immediately in local mode.</li>
+          <li>Build 3, 4, or 5 in a row to score points.</li>
+          <li>First side to 50+ points wins.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="boardCard">
+        <div id="board" class="board" aria-label="game board"></div>
+      </section>
+    </div>
   </main>
 
   <section id="celebration" class="celebration hidden" aria-live="polite">
