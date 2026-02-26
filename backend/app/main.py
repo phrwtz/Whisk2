@@ -193,6 +193,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
             # --------------- SET MODE ---------------
             elif mtype == "set_mode":
                 mark = manager.ws_to_mark.get(ws_id)
+                if mark is None:
+                    await manager.send(ws, {"type": "error", "message": "You must join first."})
+                    continue
                 if mark != Mark.O:
                     await manager.send(ws, {"type": "error", "message": "Only O can set mode."})
                     continue

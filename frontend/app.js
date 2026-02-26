@@ -46,6 +46,16 @@ let highlightedCells = new Set();
 let lastKnownPlayers = { O: null, X: null };
 let opponentJoinAnnounced = false;
 
+function showSetup() {
+  setupEl.classList.remove('hidden');
+  gameEl.classList.add('hidden');
+}
+
+function showGame() {
+  setupEl.classList.add('hidden');
+  gameEl.classList.remove('hidden');
+}
+
 function wsUrl() {
   if (typeof window.WHISK_WEBSOCKET_URL === 'string' && window.WHISK_WEBSOCKET_URL.trim()) {
     return window.WHISK_WEBSOCKET_URL;
@@ -196,6 +206,18 @@ function onCellClick(r, c) {
 }
 
 function setMode(mode) {
+  // Allow the host to choose mode even if they click Local/Remote before joining.
+  if (!myMark) {
+    join(mode);
+    modePicker.classList.add('hidden');
+    return;
+  }
+
+  if (myMark !== 'O') {
+    setStatusMessage('Only Player 1 (O) can choose the mode.');
+    return;
+  }
+
   send({ type: 'set_mode', mode });
   modePicker.classList.add('hidden');
 }
@@ -227,22 +249,31 @@ function handleMessage(msg) {
   switch (msg.type) {
     case 'joined': {
       myMark = msg.mark;
-      setupEl.classList.add('hidden');
-      gameEl.classList.remove('hidden');
 
       opponentJoinAnnounced = false;
-      setStatusMessage('Joined. Waiting for game state...');
+      // If we're the host (O), we may need to choose Local/Remote before play.
+      if (myMark === 'O' && !modeChosen) {
+        showSetup();
+        modePicker.classList.remove('hidden');
+        setStatusMessage('Joined as Player 1 (O). Choose Local or Remote.');
+      } else {
+        showGame();
+        setStatusMessage('Joined. Waiting for game state...');
+      }
       break;
     }
 
     case 'need_mode':
       modePicker.classList.remove('hidden');
+      showSetup();
       // Don’t display the “Choose mode” line in the Messages box anymore.
       // The UI itself is the prompt.
       break;
 
     case 'mode':
       modeChosen = msg.mode;
+      modePicker.classList.add('hidden');
+      showGame();
       // Not necessary to show in messages; it’s just setup.
       break;
 
@@ -334,6 +365,10 @@ function handleMessage(msg) {
         };
       }
 
+      if (msg.mode) {
+        modeChosen = msg.mode;
+      }
+
       if (typeof msg.game_over === 'boolean') {
         isGameOver = msg.game_over;
       }
@@ -353,6 +388,11 @@ function handleMessage(msg) {
       // unless we’re in normal play flow.
       if (!msg.refresh) {
         setStatusMessage(computeTurnMessage());
+      }
+
+      // If mode is now known, make sure the game view is visible.
+      if (myMark && modeChosen) {
+        showGame();
       }
 
       render();

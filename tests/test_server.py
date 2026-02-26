@@ -175,3 +175,28 @@ def test_join_resets_state_when_player_refreshes():
             assert state_for_o["scores"]["X"] == 0
 
     manager.reset()
+
+
+def test_set_mode_requires_join_and_only_o_can_set_mode():
+    manager.reset()
+    client = TestClient(app)
+
+    # Can't set mode before joining.
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "set_mode", "mode": "remote"})
+        err = _recv_type(ws, "error")
+        assert err["message"] == "You must join first."
+
+    # Only O can set mode.
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "OPlayer", "mode": "remote"})
+        _recv_type(ws_o, "joined")
+
+        ws_x.send_json({"type": "join", "name": "XPlayer"})
+        _recv_type(ws_x, "joined")
+
+        ws_x.send_json({"type": "set_mode", "mode": "local"})
+        err = _recv_type(ws_x, "error")
+        assert err["message"] == "Only O can set mode."
+
+    manager.reset()
