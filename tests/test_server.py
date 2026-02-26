@@ -226,3 +226,35 @@ def test_local_mode_single_player_alternates_marks_and_commits_immediately():
         assert second_state["local_next_mark"] == "O"
 
     manager.reset()
+
+
+def test_local_mode_move_scores_only_for_current_mark():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Solo", "mode": "local"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        # Build O at (0,0), (0,1), then scoring move at (0,2).
+        ws_o.send_json({"type": "move", "row": 0, "col": 0})  # O
+        _recv_state_where(ws_o, lambda s: s["turn"] == 1)
+        ws_o.send_json({"type": "move", "row": 7, "col": 7})  # X filler
+        _recv_state_where(ws_o, lambda s: s["turn"] == 2)
+        ws_o.send_json({"type": "move", "row": 0, "col": 1})  # O
+        _recv_state_where(ws_o, lambda s: s["turn"] == 3)
+        ws_o.send_json({"type": "move", "row": 7, "col": 6})  # X filler
+        _recv_state_where(ws_o, lambda s: s["turn"] == 4)
+        ws_o.send_json({"type": "move", "row": 0, "col": 2})  # O scores
+        o_scoring = _recv_state_where(ws_o, lambda s: s["turn"] == 5)
+        assert o_scoring["scores"]["O"] > 0
+        o_before_x = o_scoring["scores"]["O"]
+
+        # X scores on this move; O's score should not also increase.
+        ws_o.send_json({"type": "move", "row": 7, "col": 5})  # X scores
+        x_scoring = _recv_state_where(ws_o, lambda s: s["turn"] == 6)
+        assert x_scoring["scores"]["X"] > 0
+        assert x_scoring["scores"]["O"] == o_before_x
+
+    manager.reset()

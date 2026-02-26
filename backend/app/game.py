@@ -363,10 +363,10 @@ def commit_single_move(state: GameState, mark: Mark) -> Dict[str, object]:
     state.pending[mark] = None
 
     occ = state.board_occupancy()
-    add_o = score_for_board(occ, Mark.O)
-    add_x = score_for_board(occ, Mark.X)
-    state.scores[Mark.O] += add_o
-    state.scores[Mark.X] += add_x
+    # Local mode commits one mark at a time, so only the moving mark
+    # should receive points for this move.
+    add_mark = score_for_board(occ, mark)
+    state.scores[mark] += add_mark
     state.last_highlighted_cells = scoring_coords_for_board(occ)
     state.highlight_visible_for = {Mark.O, Mark.X}
 
