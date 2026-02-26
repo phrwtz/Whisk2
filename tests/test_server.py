@@ -29,6 +29,10 @@ def _recv_pending_flags(ws, max_messages: int = 8):
     raise AssertionError("Did not receive pending_flags")
 
 
+def _recv_n(ws, n: int):
+    return [ws.receive_json() for _ in range(n)]
+
+
 def highlight_coords(state_msg):
     return {(h["row"], h["col"]) for h in state_msg.get("highlight", [])}
 
@@ -295,5 +299,49 @@ def test_remote_mode_turn_signals_for_both_players():
         committed_x = _recv_state_where(ws_x, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
         assert committed_o["pending"] == {"O": False, "X": False}
         assert committed_x["pending"] == {"O": False, "X": False}
+
+    manager.reset()
+
+
+def test_remote_score_event_sent_only_to_scoring_player():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Olive", "mode": "remote"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_x.send_json({"type": "join", "name": "Xavier"})
+        _recv_type(ws_x, "joined")
+        _recv_type(ws_x, "state")
+        _recv_type(ws_o, "state")
+
+        def play_turn(o_coord, x_coord):
+            ws_o.send_json({"type": "move", "row": o_coord[0], "col": o_coord[1]})
+            _recv_pending_flags(ws_o)
+            _recv_pending_flags(ws_x)
+            ws_x.send_json({"type": "move", "row": x_coord[0], "col": x_coord[1]})
+
+        # Build O line at row 0 while X plays elsewhere.
+        play_turn((0, 0), (7, 7))
+        _recv_type(ws_o, "state")
+        _recv_type(ws_x, "state")
+        _recv_type(ws_o, "turn_committed")
+        _recv_type(ws_x, "turn_committed")
+
+        play_turn((0, 1), (7, 6))
+        _recv_type(ws_o, "state")
+        _recv_type(ws_x, "state")
+        _recv_type(ws_o, "turn_committed")
+        _recv_type(ws_x, "turn_committed")
+
+        # Third O in row scores; only O should get score_event.
+        play_turn((0, 2), (7, 5))
+        o_msgs = _recv_n(ws_o, 3)  # state, score_event, turn_committed
+        x_msgs = _recv_n(ws_x, 2)  # state, turn_committed
+
+        assert any(m.get("type") == "score_event" and m.get("mark") == "O" and m.get("added", 0) > 0 for m in o_msgs)
+        assert all(m.get("type") != "score_event" for m in x_msgs)
 
     manager.reset()

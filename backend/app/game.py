@@ -336,6 +336,7 @@ def commit_turn(state: GameState) -> Dict[str, object]:
             "O": {"row": revealed[Mark.O].row, "col": revealed[Mark.O].col},
             "X": {"row": revealed[Mark.X].row, "col": revealed[Mark.X].col},
         },
+        "added": {"O": add_o, "X": add_x},
         "scores": {"O": state.scores[Mark.O], "X": state.scores[Mark.X]},
         "done": done,
         "winner": winner,
@@ -385,6 +386,7 @@ def commit_single_move(state: GameState, mark: Mark) -> Dict[str, object]:
         "revealed": {
             mark.value: {"row": p.row, "col": p.col},
         },
+        "added": {"O": add_mark if mark == Mark.O else 0, "X": add_mark if mark == Mark.X else 0},
         "scores": {"O": state.scores[Mark.O], "X": state.scores[Mark.X]},
         "done": done,
         "winner": winner,

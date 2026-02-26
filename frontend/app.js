@@ -38,9 +38,8 @@ let ws;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
 let localNextMark = 'O';
-let committedScoreBaseline = { O: 0, X: 0 };
-let hasCommittedBaseline = false;
 let scoreFlashTimer = null;
+let isScoreFlashActive = false;
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
 
@@ -230,6 +229,7 @@ function showScoreFlash(mark, addedScore) {
   if (addedScore <= 0) return;
   const rowLen = rowLengthFromScore(addedScore);
   const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
+  isScoreFlashActive = true;
   setStatusHtml(
     `<span class="${cls}">You got ${rowLen} in a row! You just added ${addedScore} to your score!</span>`
   );
@@ -237,6 +237,7 @@ function showScoreFlash(mark, addedScore) {
     window.clearTimeout(scoreFlashTimer);
   }
   scoreFlashTimer = window.setTimeout(() => {
+    isScoreFlashActive = false;
     setStatusMessage(computeTurnMessage());
     scoreFlashTimer = null;
   }, 1000);
@@ -520,6 +521,7 @@ function handleMessage(msg) {
         O: !!msg.pending?.O,
         X: !!msg.pending?.X,
       };
+      if (isScoreFlashActive) break;
       const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
       const youMoved = (myMark === 'O') ? !!pendingFlags.O : !!pendingFlags.X;
       const oppMoved = (myMark === 'O') ? !!pendingFlags.X : !!pendingFlags.O;
@@ -530,9 +532,16 @@ function handleMessage(msg) {
       setStatusMessage(computeTurnMessage());
       break;
 
+    case 'score_event':
+      if (msg && typeof msg.mark === 'string' && typeof msg.added === 'number') {
+        showScoreFlash(msg.mark, msg.added);
+      }
+      break;
+
     case 'turn_committed':
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
+      if (isScoreFlashActive) break;
       if (myMark && modeChosen === 'local') {
         setStatusMessage(computeTurnMessage());
       } else if (myMark) {
@@ -604,47 +613,14 @@ function handleMessage(msg) {
 
       setScoresUI();
 
-      // Keep a committed-score baseline (ignore pending preview states).
-      if (!hasCommittedBaseline && msg.pending && !msg.pending.O && !msg.pending.X) {
-        committedScoreBaseline = { O: scores.O ?? 0, X: scores.X ?? 0 };
-        hasCommittedBaseline = true;
-      }
-
       highlightedCells = new Set();
       if (Array.isArray(msg.highlight)) {
         msg.highlight.forEach((coord) => highlightedCells.add(`${coord.row},${coord.col}`));
       }
 
-      let showedScoreFlash = false;
-      if (msg.refresh && modeChosen && hasCommittedBaseline) {
-        if (modeChosen === 'remote' && myMark) {
-          const myAdded = (scores[myMark] ?? 0) - (committedScoreBaseline[myMark] ?? 0);
-          if (myAdded > 0) {
-            showScoreFlash(myMark, myAdded);
-            showedScoreFlash = true;
-          }
-        }
-        if (modeChosen === 'local') {
-          const addO = (scores.O ?? 0) - (committedScoreBaseline.O ?? 0);
-          const addX = (scores.X ?? 0) - (committedScoreBaseline.X ?? 0);
-          if (addO > 0 || addX > 0) {
-            if (addX > 0 && addX >= addO) {
-              showScoreFlash('X', addX);
-            } else {
-              showScoreFlash('O', addO);
-            }
-            showedScoreFlash = true;
-          }
-        }
-        committedScoreBaseline = { O: scores.O ?? 0, X: scores.X ?? 0 };
-      } else if (!msg.refresh && msg.pending && !msg.pending.O && !msg.pending.X) {
-        committedScoreBaseline = { O: scores.O ?? 0, X: scores.X ?? 0 };
-        hasCommittedBaseline = true;
-      }
-
       // Don’t overwrite explicit server info messages like “X has joined” or “You reset”
       // unless we’re in normal play flow.
-      if (!showedScoreFlash && !msg.refresh && (modeChosen || myMark !== 'O')) {
+      if (!isScoreFlashActive && !msg.refresh && (modeChosen || myMark !== 'O')) {
         setStatusMessage(computeTurnMessage());
       }
 

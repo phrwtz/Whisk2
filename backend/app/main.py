@@ -243,6 +243,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                     manager.local_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
                     await broadcast_state(refresh=True)
+                    added = summary.get("added", {})
+                    add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
+                    add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
+                    if add_o > 0 and Mark.O in manager.players:
+                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
+                    if add_x > 0 and Mark.O in manager.players:
+                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "X", "added": add_x})
                     await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
                     if summary["done"]:
                         manager.game_over = True
@@ -276,6 +283,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if ready_to_commit(manager.state):
                     summary = commit_turn(manager.state)
                     await broadcast_state(refresh=True)
+                    added = summary.get("added", {})
+                    add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
+                    add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
+                    if add_o > 0 and Mark.O in manager.players:
+                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
+                    if add_x > 0 and Mark.X in manager.players:
+                        await manager.send(manager.players[Mark.X].ws, {"type": "score_event", "mark": "X", "added": add_x})
                     await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
                     if summary["done"]:
                         manager.game_over = True
