@@ -28,6 +28,8 @@ const newGameBtn = document.getElementById('newGameBtn');
 
 const boardEl = document.getElementById('board');
 const scoresEl = document.getElementById('scores');
+const scoresCard = document.getElementById('scoresCard');
+const messagesCard = document.getElementById('messagesCard');
 const messagesEl = document.getElementById('messages');
 
 let ws;
@@ -81,15 +83,24 @@ function playerName(mark, fallback) {
 }
 
 function setScoresUI() {
-  const oName = playerName('O', 'Player 1');
-  const xName = playerName('X', 'Player 2');
+  if (!scoresEl) return;
+
+  if (!modeChosen) {
+    scoresEl.textContent = '';
+    return;
+  }
+
   const oScore = scores?.O ?? 0;
   const xScore = scores?.X ?? 0;
 
-  if (!scoresEl) return;
-  scoresEl.textContent =
-    `${oName} (O): ${oScore}\n` +
-    `${xName} (X): ${xScore}`;
+  if (modeChosen === 'local') {
+    scoresEl.textContent = `O: ${oScore}\nX: ${xScore}`;
+    return;
+  }
+
+  const oName = playerName('O', 'Player 1');
+  const xName = playerName('X', 'Player 2');
+  scoresEl.textContent = `${oName} (O): ${oScore}\n${xName} (X): ${xScore}`;
 }
 
 function setStatusMessage(text) {
@@ -97,11 +108,17 @@ function setStatusMessage(text) {
   messagesEl.textContent = text;
 }
 
+function updateModePanels() {
+  const hidePanels = !modeChosen;
+  if (scoresCard) scoresCard.classList.toggle('hidden', hidePanels);
+  if (messagesCard) messagesCard.classList.toggle('hidden', hidePanels);
+}
+
 function computeTurnMessage() {
   if (!myMark) return 'Not joined yet.';
   if (isGameOver) return 'Game over. Start a new game to play again.';
   if (modeChosen === 'local') {
-    return `Local mode: next move is ${localNextMark}.`;
+    return `It is ${localNextMark}'s turn.`;
   }
 
   const oName = playerName('O', 'first player');
@@ -278,7 +295,8 @@ function handleMessage(msg) {
       modeChosen = msg.mode;
       modePicker.classList.add('hidden');
       showGame();
-      // Not necessary to show in messages; it’s just setup.
+      updateModePanels();
+      setStatusMessage(computeTurnMessage());
       break;
 
     case 'info':
@@ -323,7 +341,9 @@ function handleMessage(msg) {
     case 'turn_committed':
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
-      if (myMark && modeChosen !== 'local') {
+      if (myMark && modeChosen === 'local') {
+        setStatusMessage(computeTurnMessage());
+      } else if (myMark) {
         const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
         setStatusMessage(`Waiting for you to make your next move. ${oppName} hasn't moved yet.`);
       }
@@ -371,6 +391,7 @@ function handleMessage(msg) {
 
       if (msg.mode) {
         modeChosen = msg.mode;
+        updateModePanels();
       }
       if (msg.local_next_mark) {
         localNextMark = msg.local_next_mark;
@@ -393,7 +414,7 @@ function handleMessage(msg) {
 
       // Don’t overwrite explicit server info messages like “X has joined” or “You reset”
       // unless we’re in normal play flow.
-      if (!msg.refresh) {
+      if (!msg.refresh && (modeChosen || myMark !== 'O')) {
         setStatusMessage(computeTurnMessage());
       }
 
@@ -425,4 +446,5 @@ if (newGameBtn) {
 
 // Init
 createBoard();
+updateModePanels();
 connect();
