@@ -95,7 +95,7 @@ input {
 .cell {
   width: 100%;
   aspect-ratio: 1 / 1;
-  border: 1px solid var(--border);
+  border: 2px solid #4b5563;
   border-radius: 10px;
   background: #ffffff;
   font-weight: 700;
