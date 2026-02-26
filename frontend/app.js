@@ -38,6 +38,9 @@ let ws;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
 let localNextMark = 'O';
+let committedScoreBaseline = { O: 0, X: 0 };
+let hasCommittedBaseline = false;
+let scoreFlashTimer = null;
 
 let players = { O: null, X: null }; // backend sends strings or null
 let scores = { O: 0, X: 0 };        // backend sends {O: number, X: number}
@@ -110,6 +113,11 @@ function setScoresUI() {
 function setStatusMessage(text) {
   if (!messagesEl) return;
   messagesEl.innerHTML = formatMessageHtml(text);
+}
+
+function setStatusHtml(html) {
+  if (!messagesEl) return;
+  messagesEl.innerHTML = html;
 }
 
 function updateModePanels() {
@@ -208,6 +216,28 @@ function playVictoryMotif() {
     osc.start(start + i * 0.15);
     osc.stop(start + i * 0.15 + 0.2);
   });
+}
+
+function rowLengthFromScore(addedScore) {
+  if (addedScore >= 9) return 5;
+  if (addedScore >= 4) return 4;
+  return 3;
+}
+
+function showScoreFlash(mark, addedScore) {
+  if (addedScore <= 0) return;
+  const rowLen = rowLengthFromScore(addedScore);
+  const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
+  setStatusHtml(
+    `<span class="${cls}">You got ${rowLen} in a row! You just added ${addedScore} to your score!</span>`
+  );
+  if (scoreFlashTimer) {
+    window.clearTimeout(scoreFlashTimer);
+  }
+  scoreFlashTimer = window.setTimeout(() => {
+    setStatusMessage(computeTurnMessage());
+    scoreFlashTimer = null;
+  }, 1000);
 }
 
 function showCelebration(message) {
@@ -490,14 +520,47 @@ function handleMessage(msg) {
 
       setScoresUI();
 
+      // Keep a committed-score baseline (ignore pending preview states).
+      if (!hasCommittedBaseline && msg.pending && !msg.pending.O && !msg.pending.X) {
+        committedScoreBaseline = { O: scores.O ?? 0, X: scores.X ?? 0 };
+        hasCommittedBaseline = true;
+      }
+
       highlightedCells = new Set();
       if (Array.isArray(msg.highlight)) {
         msg.highlight.forEach((coord) => highlightedCells.add(`${coord.row},${coord.col}`));
       }
 
+      let showedScoreFlash = false;
+      if (msg.refresh && modeChosen && hasCommittedBaseline) {
+        if (modeChosen === 'remote' && myMark) {
+          const myAdded = (scores[myMark] ?? 0) - (committedScoreBaseline[myMark] ?? 0);
+          if (myAdded > 0) {
+            showScoreFlash(myMark, myAdded);
+            showedScoreFlash = true;
+          }
+        }
+        if (modeChosen === 'local') {
+          const addO = (scores.O ?? 0) - (committedScoreBaseline.O ?? 0);
+          const addX = (scores.X ?? 0) - (committedScoreBaseline.X ?? 0);
+          if (addO > 0 || addX > 0) {
+            if (addX > 0 && addX >= addO) {
+              showScoreFlash('X', addX);
+            } else {
+              showScoreFlash('O', addO);
+            }
+            showedScoreFlash = true;
+          }
+        }
+        committedScoreBaseline = { O: scores.O ?? 0, X: scores.X ?? 0 };
+      } else if (!msg.refresh && msg.pending && !msg.pending.O && !msg.pending.X) {
+        committedScoreBaseline = { O: scores.O ?? 0, X: scores.X ?? 0 };
+        hasCommittedBaseline = true;
+      }
+
       // Don’t overwrite explicit server info messages like “X has joined” or “You reset”
       // unless we’re in normal play flow.
-      if (!msg.refresh && (modeChosen || myMark !== 'O')) {
+      if (!showedScoreFlash && !msg.refresh && (modeChosen || myMark !== 'O')) {
         setStatusMessage(computeTurnMessage());
       }
 
