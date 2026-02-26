@@ -109,9 +109,9 @@ function setStatusMessage(text) {
 }
 
 function updateModePanels() {
-  const hidePanels = !modeChosen;
-  if (scoresCard) scoresCard.classList.toggle('hidden', hidePanels);
-  if (messagesCard) messagesCard.classList.toggle('hidden', hidePanels);
+  const hideScores = !modeChosen;
+  if (scoresCard) scoresCard.classList.toggle('hidden', hideScores);
+  if (messagesCard) messagesCard.classList.remove('hidden');
 }
 
 function computeTurnMessage() {
