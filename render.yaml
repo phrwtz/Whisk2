@@ -1,0 +1,13 @@
+services:
+  - name: whisk-backend
+    type: web
+    env: docker
+    region: oregon
+    plan: free
+    branch: main
+    dockerfilePath: backend/Dockerfile
+    buildCommand: ""
+    startCommand: ""
+    envVars:
+      - key: PORT
+        value: "8000"

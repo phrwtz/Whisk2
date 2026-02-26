@@ -47,6 +47,9 @@ let lastKnownPlayers = { O: null, X: null };
 let opponentJoinAnnounced = false;
 
 function wsUrl() {
+  if (typeof window.WHISK_WEBSOCKET_URL === 'string' && window.WHISK_WEBSOCKET_URL.trim()) {
+    return window.WHISK_WEBSOCKET_URL;
+  }
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${window.location.host}/ws`;
 }

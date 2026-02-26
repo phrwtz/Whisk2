@@ -135,6 +135,21 @@ If you’re using this as a classroom activity, running the FastAPI server on a 
 - `backend/app/game.py` contains the rules and scoring. It is written so you can test it without needing a browser.
 - `backend/app/main.py` is the server that connects players and enforces the “hidden until both moved” rule.
 - `frontend/app.js` draws the board and sends moves to the server.
+ - `backend/Dockerfile` lets you run the backend with Docker (the container installs `requirements.txt`, copies the backend, and starts `uvicorn`), which is handy for Render or local Docker testing.
+
+---
+
+## Deploying on Render via Docker
+
+1. Push your `main` branch to GitHub so Render can read the repo.
+2. In Render select **New** → **Web Service** → “Deploy with Dockerfile.”
+3. Authorize Render to access `github.com/phrwtz/Whisk2`, choose the `main` branch, and set:
+   - **Dockerfile path:** `backend/Dockerfile`
+   - **Port:** `8000` (Render will inject `$PORT` automatically, and the Dockerfile honors it)
+   - **Instance Type:** `Free` (or any plan you prefer)
+4. Deploy; Render will build the image and expose a `https://your-service.onrender.com` endpoint.
+5. Update `frontend/app.js` so `wsUrl()` points at `wss://your-service.onrender.com/ws` if the frontend runs somewhere else.
+6. Open that URL from two browsers to verify real-time play.
 
 ---
 
