@@ -240,7 +240,7 @@ function showScoreFlash(mark, addedScore) {
     isScoreFlashActive = false;
     setStatusMessage(computeTurnMessage());
     scoreFlashTimer = null;
-  }, 1000);
+  }, 2000);
 }
 
 function showCelebration(message) {
@@ -295,9 +295,9 @@ function animateMoveDrop(mark, row, col) {
   hand.style.opacity = '0.2';
 
   return new Promise((resolve) => {
-    const travelMs = 380;
-    const dropMs = 150;
-    const retreatMs = 320;
+    const travelMs = 450;
+    const dropMs = 100;
+    const retreatMs = 450;
 
     requestAnimationFrame(() => {
       hand.style.transition = `left ${travelMs}ms ease-out, top ${travelMs}ms ease-out, opacity 120ms ease-out, transform ${travelMs}ms ease-out`;
@@ -320,9 +320,9 @@ function animateMoveDrop(mark, row, col) {
         window.setTimeout(() => {
           layer.remove();
           resolve();
-        }, retreatMs + 40);
+        }, retreatMs);
       }, dropMs);
-    }, travelMs + 20);
+    }, travelMs);
   });
 }
 
