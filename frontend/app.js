@@ -37,6 +37,7 @@ const messagesEl = document.getElementById('messages');
 let ws;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
+let selectedJoinMode = null;
 let localNextMark = 'O';
 let scoreFlashTimer = null;
 let isScoreFlashActive = false;
@@ -409,10 +410,12 @@ function onCellClick(r, c) {
 }
 
 function setMode(mode) {
-  // Allow the host to choose mode even if they click Local/Remote before joining.
+  // Pre-join mode selection is required before enabling Join.
   if (!myMark) {
-    join(mode);
-    modePicker.classList.add('hidden');
+    selectedJoinMode = mode;
+    if (joinBtn) joinBtn.disabled = false;
+    if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === 'local');
+    if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === 'remote');
     return;
   }
 
@@ -457,25 +460,16 @@ function handleMessage(msg) {
       // Always show the board as soon as a player joins.
       showGame();
 
-      // If we're the host (O), we may still need to choose Local/Remote.
-      if (myMark === 'O' && !modeChosen) {
-        modePicker.classList.remove('hidden');
-        setStatusMessage('Joined as Player 1 (O). Choose Local or Remote.');
-      } else {
-        setStatusMessage('Joined. Waiting for game state...');
-      }
+      setStatusMessage('Joined. Waiting for game state...');
       break;
     }
 
     case 'need_mode':
-      modePicker.classList.remove('hidden');
-      // Don’t display the “Choose mode” line in the Messages box anymore.
-      // The UI itself is the prompt.
+      setStatusMessage('Choose Local or Remote before joining.');
       break;
 
     case 'mode':
       modeChosen = msg.mode;
-      modePicker.classList.add('hidden');
       showGame();
       updateModePanels();
       setStatusMessage(computeTurnMessage());
@@ -639,7 +633,10 @@ function handleMessage(msg) {
 }
 
 // Wire up UI
-joinBtn.addEventListener('click', () => join(null));
+joinBtn.addEventListener('click', () => {
+  if (!selectedJoinMode) return;
+  join(selectedJoinMode);
+});
 localBtn.addEventListener('click', () => setMode('local'));
 remoteBtn.addEventListener('click', () => setMode('remote'));
 

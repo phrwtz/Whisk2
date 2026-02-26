@@ -76,6 +76,25 @@ h2 {
   box-shadow: 0 4px 12px rgba(57, 39, 27, 0.2);
 }
 
+.ui-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+  box-shadow: none;
+}
+
+.mode-btn-selected {
+  border-color: #0f6adf;
+  box-shadow: 0 0 0 2px rgba(15, 106, 223, 0.2);
+}
+
+#modePicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 label {
   display: block;
   margin: 8px 0 12px;
