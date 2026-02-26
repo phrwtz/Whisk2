@@ -251,13 +251,14 @@ function handleMessage(msg) {
       myMark = msg.mark;
 
       opponentJoinAnnounced = false;
-      // If we're the host (O), we may need to choose Local/Remote before play.
+      // Always show the board as soon as a player joins.
+      showGame();
+
+      // If we're the host (O), we may still need to choose Local/Remote.
       if (myMark === 'O' && !modeChosen) {
-        showSetup();
         modePicker.classList.remove('hidden');
         setStatusMessage('Joined as Player 1 (O). Choose Local or Remote.');
       } else {
-        showGame();
         setStatusMessage('Joined. Waiting for game state...');
       }
       break;
@@ -265,7 +266,6 @@ function handleMessage(msg) {
 
     case 'need_mode':
       modePicker.classList.remove('hidden');
-      showSetup();
       // Don’t display the “Choose mode” line in the Messages box anymore.
       // The UI itself is the prompt.
       break;

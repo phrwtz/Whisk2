@@ -17,20 +17,21 @@
 
     <label>
       Your name
-      <input id="nameInput" placeholder="e.g., Paul" />
+      <input id="nameInput" />
     </label>
-
-    <div id="modePicker" class="hidden">
-      <p><strong>Host:</strong> Choose how you want to play.</p>
-      <button id="localBtn" class="ui-btn" type="button">Local (one computer)</button>
-      <button id="remoteBtn" class="ui-btn" type="button">Remote (two computers)</button>
-    </div>
 
     <button id="joinBtn" class="ui-btn" type="button">Join</button>
     <p class="hint">Two-computer game: both players open the same URL.</p>
   </section>
 
   <main class="hidden" id="game">
+    <section id="modePicker" class="card hidden">
+      <h2>Choose Mode</h2>
+      <p><strong>Host (O):</strong> Choose how you want to play.</p>
+      <button id="localBtn" class="ui-btn" type="button">Local (one computer)</button>
+      <button id="remoteBtn" class="ui-btn" type="button">Remote (two computers)</button>
+    </section>
+
     <div class="top-row">
       <section class="card" id="scoresCard">
         <h2>Scores</h2>
