@@ -41,6 +41,8 @@ let localNextMark = 'O';
 let committedScoreBaseline = { O: 0, X: 0 };
 let hasCommittedBaseline = false;
 let scoreFlashTimer = null;
+let visiblePieceKeys = new Set();
+let moveAnimationQueue = Promise.resolve();
 
 let players = { O: null, X: null }; // backend sends strings or null
 let scores = { O: 0, X: 0 };        // backend sends {O: number, X: number}
@@ -248,6 +250,86 @@ function showCelebration(message) {
   window.setTimeout(() => {
     celebrationEl.classList.add('hidden');
   }, 4500);
+}
+
+function pieceKey(p) {
+  return `${p.mark}:${p.row},${p.col}`;
+}
+
+function detectAppearingPieces(nextPieces) {
+  const nextKeys = new Set(nextPieces.map(pieceKey));
+  const appearing = nextPieces.filter((p) => !visiblePieceKeys.has(pieceKey(p)));
+  visiblePieceKeys = nextKeys;
+  return appearing;
+}
+
+function animateMoveDrop(mark, row, col) {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return Promise.resolve();
+  }
+
+  const target = boardEl.querySelector(`.cell[data-row="${row}"][data-col="${col}"]`);
+  if (!target) return Promise.resolve();
+
+  const targetRect = target.getBoundingClientRect();
+  const targetX = targetRect.left + targetRect.width / 2;
+  const targetY = targetRect.top + targetRect.height / 2;
+
+  const originX = mark === 'O' ? 36 : window.innerWidth - 36;
+  const originY = window.innerHeight - 36;
+
+  const layer = document.createElement('div');
+  layer.className = 'move-hand-layer';
+  const hand = document.createElement('div');
+  hand.className = `move-hand move-hand-${mark}`;
+  hand.innerHTML =
+    `<span class="move-hand-emoji">${mark === 'O' ? '🤚' : '✋'}</span>` +
+    `<span class="move-hand-token move-hand-token-${mark}">${mark}</span>`;
+  layer.appendChild(hand);
+  document.body.appendChild(layer);
+
+  hand.style.left = `${originX}px`;
+  hand.style.top = `${originY}px`;
+  hand.style.transform = 'translate(-50%, -50%) scale(0.95)';
+  hand.style.opacity = '0.2';
+
+  return new Promise((resolve) => {
+    const travelMs = 380;
+    const dropMs = 150;
+    const retreatMs = 320;
+
+    requestAnimationFrame(() => {
+      hand.style.transition = `left ${travelMs}ms ease-out, top ${travelMs}ms ease-out, opacity 120ms ease-out, transform ${travelMs}ms ease-out`;
+      hand.style.left = `${targetX}px`;
+      hand.style.top = `${targetY - 10}px`;
+      hand.style.opacity = '1';
+      hand.style.transform = 'translate(-50%, -50%) scale(1)';
+    });
+
+    window.setTimeout(() => {
+      hand.classList.add('dropping');
+      window.setTimeout(() => {
+        hand.classList.remove('dropping');
+        hand.style.transition = `left ${retreatMs}ms ease-in, top ${retreatMs}ms ease-in, opacity ${retreatMs}ms ease-in, transform ${retreatMs}ms ease-in`;
+        hand.style.left = `${originX}px`;
+        hand.style.top = `${originY}px`;
+        hand.style.opacity = '0.1';
+        hand.style.transform = 'translate(-50%, -50%) scale(0.92)';
+
+        window.setTimeout(() => {
+          layer.remove();
+          resolve();
+        }, retreatMs + 40);
+      }, dropMs);
+    }, travelMs + 20);
+  });
+}
+
+function queueMoveAnimations(pieces) {
+  if (!pieces || pieces.length === 0) return;
+  for (const p of pieces) {
+    moveAnimationQueue = moveAnimationQueue.then(() => animateMoveDrop(p.mark, p.row, p.col));
+  }
 }
 
 function lightnessForAgeRank(ageRank) {
@@ -515,7 +597,9 @@ function handleMessage(msg) {
       }
 
       if (msg.pieces) {
+        const appearing = detectAppearingPieces(msg.pieces);
         serverPieces = msg.pieces;
+        queueMoveAnimations(appearing);
       }
 
       setScoresUI();

@@ -257,6 +257,48 @@ input {
   to { opacity: 1; }
 }
 
+.move-hand-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 45;
+}
+
+.move-hand {
+  position: fixed;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 32px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.move-hand-emoji {
+  line-height: 1;
+}
+
+.move-hand-token {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid #1f2937;
+  background: #ffffff;
+  font-weight: 800;
+  font-size: 20px;
+  line-height: 1;
+  transform: translateY(-2px);
+}
+
+.move-hand-token-O { color: var(--o-color); }
+.move-hand-token-X { color: var(--x-color); }
+
+.move-hand.dropping .move-hand-token {
+  transform: translateY(10px) scale(0.95);
+  transition: transform 140ms ease-in;
+}
+
 @media (max-width: 640px) {
   body { padding-bottom: 108px; }
   .card { margin: 8px; padding: 12px; }
