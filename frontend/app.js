@@ -378,7 +378,18 @@ function handleMessage(msg) {
       break;
 
     case 'invalid_move': {
-      setStatusMessage(msg.message || 'Invalid move.');
+      if (msg.message === 'Square already occupied') {
+        const opponentName = myMark === 'O'
+          ? playerName('X', 'your opponent')
+          : myMark === 'X'
+            ? playerName('O', 'your opponent')
+            : 'your opponent';
+        setStatusMessage(
+          `Oops! It looks as though ${opponentName} has already gone there. You'll have to pick a different square. 😢`
+        );
+      } else {
+        setStatusMessage(msg.message || 'Invalid move.');
+      }
       break;
     }
 
