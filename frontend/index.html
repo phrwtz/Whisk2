@@ -35,7 +35,6 @@
       <section class="card" id="scoresCard">
         <h2>Scores</h2>
         <div id="scores" class="scoresText"></div>
-        <button class="ui-btn" id="newGameBtn" type="button">New Game</button>
       </section>
 
       <section class="card" id="messagesCard">
@@ -48,6 +47,17 @@
       <div id="board" class="board" aria-label="game board"></div>
     </section>
   </main>
+
+  <section id="celebration" class="celebration hidden" aria-live="polite">
+    <img
+      id="celebrationGif"
+      alt="Celebration"
+      src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExYzR0emJva2xtMGVrdjYwaGN2NjJ5cXl6bml2MjlqYjhnZ2FvbHRuZiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l0MYt5jPR6QX5pnqM/giphy.gif"
+    />
+    <div id="celebrationText"></div>
+  </section>
+
+  <button class="ui-btn new-game-fab hidden" id="newGameBtn" type="button">New Game</button>
 
   <script src="/static/app.js"></script>
 </body>

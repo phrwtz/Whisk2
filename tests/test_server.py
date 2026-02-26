@@ -21,6 +21,14 @@ def _recv_state_where(ws, predicate, max_messages: int = 12):
     raise AssertionError("Did not receive expected matching state payload")
 
 
+def _recv_pending_flags(ws, max_messages: int = 8):
+    for _ in range(max_messages):
+        msg = ws.receive_json()
+        if msg.get("type") == "pending_flags":
+            return msg
+    raise AssertionError("Did not receive pending_flags")
+
+
 def highlight_coords(state_msg):
     return {(h["row"], h["col"]) for h in state_msg.get("highlight", [])}
 
@@ -256,5 +264,36 @@ def test_local_mode_move_scores_only_for_current_mark():
         x_scoring = _recv_state_where(ws_o, lambda s: s["turn"] == 6)
         assert x_scoring["scores"]["X"] > 0
         assert x_scoring["scores"]["O"] == o_before_x
+
+    manager.reset()
+
+
+def test_remote_mode_turn_signals_for_both_players():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Olive", "mode": "remote"})
+        _recv_type(ws_o, "joined")
+        state_o_initial = _recv_type(ws_o, "state")
+        assert state_o_initial["pending"] == {"O": False, "X": False}
+
+        ws_x.send_json({"type": "join", "name": "Xavier"})
+        _recv_type(ws_x, "joined")
+        state_x_join = _recv_type(ws_x, "state")
+        assert state_x_join["pending"] == {"O": False, "X": False}
+        _recv_type(ws_o, "state")
+
+        ws_o.send_json({"type": "move", "row": 0, "col": 0})
+        pending_o = _recv_pending_flags(ws_o)
+        pending_x = _recv_pending_flags(ws_x)
+        assert pending_o["pending"] == {"O": True, "X": False}
+        assert pending_x["pending"] == {"O": True, "X": False}
+
+        ws_x.send_json({"type": "move", "row": 0, "col": 1})
+        committed_o = _recv_state_where(ws_o, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
+        committed_x = _recv_state_where(ws_x, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
+        assert committed_o["pending"] == {"O": False, "X": False}
+        assert committed_x["pending"] == {"O": False, "X": False}
 
     manager.reset()

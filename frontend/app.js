@@ -25,6 +25,8 @@ const localBtn = document.getElementById('localBtn');
 const remoteBtn = document.getElementById('remoteBtn');
 
 const newGameBtn = document.getElementById('newGameBtn');
+const celebrationEl = document.getElementById('celebration');
+const celebrationTextEl = document.getElementById('celebrationText');
 
 const boardEl = document.getElementById('board');
 const scoresEl = document.getElementById('scores');
@@ -52,11 +54,13 @@ let opponentJoinAnnounced = false;
 function showSetup() {
   setupEl.classList.remove('hidden');
   gameEl.classList.add('hidden');
+  if (newGameBtn) newGameBtn.classList.add('hidden');
 }
 
 function showGame() {
   setupEl.classList.add('hidden');
   gameEl.classList.remove('hidden');
+  if (newGameBtn) newGameBtn.classList.remove('hidden');
 }
 
 function wsUrl() {
@@ -105,7 +109,7 @@ function setScoresUI() {
 
 function setStatusMessage(text) {
   if (!messagesEl) return;
-  messagesEl.textContent = text;
+  messagesEl.innerHTML = formatMessageHtml(text);
 }
 
 function updateModePanels() {
@@ -149,6 +153,71 @@ function computeTurnMessage() {
     return `Waiting for ${oppName}'s move.`;
   }
   return `Both moves received.`;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function formatMessageHtml(text) {
+  let html = escapeHtml(text);
+  if (modeChosen !== 'remote') return html;
+
+  const oName = players?.O;
+  const xName = players?.X;
+
+  if (typeof oName === 'string' && oName.trim()) {
+    const safeO = escapeHtml(oName.trim());
+    const reO = new RegExp(escapeRegExp(safeO), 'g');
+    html = html.replace(reO, `<span class="msg-player-o">${escapeHtml(oName.trim())}</span>`);
+  }
+  if (typeof xName === 'string' && xName.trim()) {
+    const safeX = escapeHtml(xName.trim());
+    const reX = new RegExp(escapeRegExp(safeX), 'g');
+    html = html.replace(reX, `<span class="msg-player-x">${escapeHtml(xName.trim())}</span>`);
+  }
+  return html;
+}
+
+function playVictoryMotif() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  const ctx = new AudioCtx();
+  const start = ctx.currentTime;
+  const notes = [523.25, 659.25, 783.99, 1046.5];
+
+  notes.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, start + i * 0.15);
+    gain.gain.setValueAtTime(0.0001, start + i * 0.15);
+    gain.gain.exponentialRampToValueAtTime(0.18, start + i * 0.15 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + i * 0.15 + 0.18);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(start + i * 0.15);
+    osc.stop(start + i * 0.15 + 0.2);
+  });
+}
+
+function showCelebration(message) {
+  if (!celebrationEl || !celebrationTextEl) return;
+  celebrationTextEl.textContent = message;
+  celebrationEl.classList.remove('hidden');
+  playVictoryMotif();
+  window.setTimeout(() => {
+    celebrationEl.classList.add('hidden');
+  }, 4500);
 }
 
 function lightnessForAgeRank(ageRank) {
@@ -352,6 +421,9 @@ function handleMessage(msg) {
     case 'game_over':
       isGameOver = true;
       setStatusMessage(msg.message || 'Game over!');
+      if (msg.message && msg.message.includes('wins')) {
+        showCelebration(msg.message);
+      }
       render();
       break;
 
