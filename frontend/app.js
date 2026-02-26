@@ -33,6 +33,7 @@ const messagesEl = document.getElementById('messages');
 let ws;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
+let localNextMark = 'O';
 
 let players = { O: null, X: null }; // backend sends strings or null
 let scores = { O: 0, X: 0 };        // backend sends {O: number, X: number}
@@ -99,6 +100,9 @@ function setStatusMessage(text) {
 function computeTurnMessage() {
   if (!myMark) return 'Not joined yet.';
   if (isGameOver) return 'Game over. Start a new game to play again.';
+  if (modeChosen === 'local') {
+    return `Local mode: next move is ${localNextMark}.`;
+  }
 
   const oName = playerName('O', 'first player');
   const xName = playerName('X', 'second player');
@@ -319,7 +323,7 @@ function handleMessage(msg) {
     case 'turn_committed':
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
-      if (myMark) {
+      if (myMark && modeChosen !== 'local') {
         const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
         setStatusMessage(`Waiting for you to make your next move. ${oppName} hasn't moved yet.`);
       }
@@ -367,6 +371,9 @@ function handleMessage(msg) {
 
       if (msg.mode) {
         modeChosen = msg.mode;
+      }
+      if (msg.local_next_mark) {
+        localNextMark = msg.local_next_mark;
       }
 
       if (typeof msg.game_over === 'boolean') {

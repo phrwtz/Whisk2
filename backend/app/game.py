@@ -342,6 +342,55 @@ def commit_turn(state: GameState) -> Dict[str, object]:
     }
 
 
+def commit_single_move(state: GameState, mark: Mark) -> Dict[str, object]:
+    """Apply one pending move for `mark`, then add score for resulting board.
+
+    Used by local mode, where a single client alternates O/X and each move
+    is committed immediately (no simultaneous hidden reservations).
+    """
+    if state.pending[mark] is None:
+        raise RuntimeError("Cannot commit: selected player has not moved")
+
+    state.turn += 1
+
+    row, col = state.pending[mark]  # type: ignore[misc]
+    p = Piece(mark=mark, row=row, col=col, turn_placed=state.turn)
+    state.pieces[mark].append(p)
+
+    while len(state.pieces[mark]) > MAX_PIECES_PER_PLAYER:
+        state.pieces[mark].popleft()
+
+    state.pending[mark] = None
+
+    occ = state.board_occupancy()
+    add_o = score_for_board(occ, Mark.O)
+    add_x = score_for_board(occ, Mark.X)
+    state.scores[Mark.O] += add_o
+    state.scores[Mark.X] += add_x
+    state.last_highlighted_cells = scoring_coords_for_board(occ)
+    state.highlight_visible_for = {Mark.O, Mark.X}
+
+    done = state.scores[Mark.O] >= 50 or state.scores[Mark.X] >= 50
+    winner: Optional[str] = None
+    if done:
+        if state.scores[Mark.O] > state.scores[Mark.X]:
+            winner = "O"
+        elif state.scores[Mark.X] > state.scores[Mark.O]:
+            winner = "X"
+        else:
+            winner = "TIE"
+
+    return {
+        "turn": state.turn,
+        "revealed": {
+            mark.value: {"row": p.row, "col": p.col},
+        },
+        "scores": {"O": state.scores[Mark.O], "X": state.scores[Mark.X]},
+        "done": done,
+        "winner": winner,
+    }
+
+
 def pieces_for_client(
     state: GameState, viewer_mark: Optional[Mark] = None
 ) -> List[Dict[str, object]]:

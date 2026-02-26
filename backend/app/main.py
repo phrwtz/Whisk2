@@ -24,6 +24,7 @@ from .game import (
     GameState,
     Mark,
     apply_move,
+    commit_single_move,
     commit_turn,
     highlight_coords_for_viewer,
     pieces_for_client,
@@ -48,6 +49,7 @@ class GameManager:
         """Clear board/scores/turn/pending but keep players + mode."""
         self.state = GameState()
         self.game_over = False
+        self.local_next_mark = Mark.O
 
     def reset(self) -> None:
         self.state = GameState()
@@ -55,6 +57,7 @@ class GameManager:
         self.ws_to_mark: Dict[str, Mark] = {}
         self.mode: Optional[str] = None  # 'remote' or 'local'
         self.game_over = False
+        self.local_next_mark = Mark.O
         self.game_id = str(uuid.uuid4())
         self.reset_on_next_join = False
 
@@ -115,6 +118,7 @@ async def send_state(to_ws: WebSocket, viewer_mark: Optional[Mark] = None, refre
             "X": manager.state.pending[Mark.X] is not None,
         },
         "mode": manager.mode,
+        "local_next_mark": manager.local_next_mark.value if manager.mode == "local" else None,
         "players": {
             "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
             "X": manager.players[Mark.X].name if Mark.X in manager.players else None,
@@ -208,10 +212,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 manager.mode = mode
                 await manager.broadcast({"type": "mode", "mode": mode})
                 if mode == "local":
-                    await manager.broadcast({
-                        "type": "info",
-                        "message": "Local mode currently uses the same two-player server flow as remote mode.",
-                    })
+                    manager.local_next_mark = Mark.O
                 await broadcast_state()
 
             # --------------- MOVE ---------------
@@ -227,6 +228,31 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                 row = int(msg.get("row"))
                 col = int(msg.get("col"))
+
+                if manager.mode == "local":
+                    if mark != Mark.O:
+                        await manager.send(ws, {"type": "error", "message": "Only Player 1 can move in local mode."})
+                        continue
+                    moving_mark = manager.local_next_mark
+                    try:
+                        apply_move(manager.state, moving_mark, row, col)
+                        summary = commit_single_move(manager.state, moving_mark)
+                    except ValueError as e:
+                        await manager.send(ws, {"type": "invalid_move", "message": str(e)})
+                        continue
+
+                    manager.local_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
+                    await broadcast_state(refresh=True)
+                    await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
+                    if summary["done"]:
+                        manager.game_over = True
+                        winner = summary.get("winner")
+                        winner_mark = winner if isinstance(winner, str) else None
+                        await manager.broadcast({
+                            "type": "game_over",
+                            "message": game_over_message(winner_mark),
+                        })
+                    continue
 
                 try:
                     apply_move(manager.state, mark, row, col)

@@ -200,3 +200,29 @@ def test_set_mode_requires_join_and_only_o_can_set_mode():
         assert err["message"] == "Only O can set mode."
 
     manager.reset()
+
+
+def test_local_mode_single_player_alternates_marks_and_commits_immediately():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "OPlayer", "mode": "local"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_o.send_json({"type": "move", "row": 0, "col": 0})
+        first_state = _recv_state_where(
+            ws_o, lambda s: s["turn"] == 1 and (not s["pending"]["O"]) and (not s["pending"]["X"])
+        )
+        assert any(p["mark"] == "O" and p["row"] == 0 and p["col"] == 0 for p in first_state["pieces"])
+        assert first_state["local_next_mark"] == "X"
+
+        ws_o.send_json({"type": "move", "row": 0, "col": 1})
+        second_state = _recv_state_where(
+            ws_o, lambda s: s["turn"] == 2 and (not s["pending"]["O"]) and (not s["pending"]["X"])
+        )
+        assert any(p["mark"] == "X" and p["row"] == 0 and p["col"] == 1 for p in second_state["pieces"])
+        assert second_state["local_next_mark"] == "O"
+
+    manager.reset()
