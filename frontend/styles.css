@@ -95,6 +95,13 @@ h2 {
   margin-bottom: 10px;
 }
 
+.setup-notice {
+  min-height: 24px;
+  margin-bottom: 8px;
+  color: #7a2e1f;
+  font-weight: 700;
+}
+
 label {
   display: block;
   margin: 8px 0 12px;

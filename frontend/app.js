@@ -33,6 +33,7 @@ const scoresEl = document.getElementById('scores');
 const scoresCard = document.getElementById('scoresCard');
 const messagesCard = document.getElementById('messagesCard');
 const messagesEl = document.getElementById('messages');
+const setupNoticeEl = document.getElementById('setupNotice');
 
 let ws;
 let myMark = null;              // "O" or "X"
@@ -123,11 +124,20 @@ function setScoresUI() {
 }
 
 function setStatusMessage(text) {
+  const html = formatMessageHtml(text);
+  if (!myMark) {
+    if (setupNoticeEl) setupNoticeEl.innerHTML = html;
+    return;
+  }
   if (!messagesEl) return;
-  messagesEl.innerHTML = formatMessageHtml(text);
+  messagesEl.innerHTML = html;
 }
 
 function setStatusHtml(html) {
+  if (!myMark) {
+    if (setupNoticeEl) setupNoticeEl.innerHTML = html;
+    return;
+  }
   if (!messagesEl) return;
   messagesEl.innerHTML = html;
 }
@@ -494,6 +504,7 @@ function handleMessage(msg) {
   switch (msg.type) {
     case 'joined': {
       myMark = msg.mark;
+      if (setupNoticeEl) setupNoticeEl.textContent = '';
 
       opponentJoinAnnounced = false;
       // Always show the board as soon as a player joins.
