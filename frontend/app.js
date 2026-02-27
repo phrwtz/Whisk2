@@ -38,6 +38,8 @@ let ws;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
 let selectedJoinMode = null;
+let lobbyMode = null;
+let lobbyHostName = null;
 let localNextMark = 'O';
 let scoreFlashTimer = null;
 let isScoreFlashActive = false;
@@ -59,7 +61,7 @@ let opponentJoinAnnounced = false;
 function updateJoinButtonState() {
   if (!joinBtn) return;
   const hasName = !!nameInput?.value.trim();
-  const hasMode = !!selectedJoinMode;
+  const hasMode = !!selectedJoinMode || !!lobbyMode;
   joinBtn.disabled = !(hasName && hasMode);
 }
 
@@ -426,6 +428,7 @@ function setMode(mode) {
   // Pre-join mode selection is required before enabling Join.
   if (!myMark) {
     selectedJoinMode = mode;
+    lobbyMode = mode;
     updateJoinButtonState();
     if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === 'local');
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === 'remote');
@@ -446,11 +449,34 @@ function join(mode = null) {
   send({ type: 'join', name, mode });
 }
 
+function updatePreJoinUiFromLobby() {
+  if (myMark) return;
+  const hostPresent = !!lobbyHostName;
+
+  if (hostPresent) {
+    if (modePicker) modePicker.classList.add('hidden');
+    selectedJoinMode = lobbyMode || selectedJoinMode;
+    updateJoinButtonState();
+    if (lobbyMode === 'local') {
+      setStatusMessage(`${lobbyHostName} is playing Whisk in local mode so you can't join at this time.`);
+    } else if (lobbyMode === 'remote') {
+      setStatusMessage(`Please join ${lobbyHostName} to play Whisk.`);
+    }
+  } else {
+    if (modePicker) modePicker.classList.remove('hidden');
+    if (!selectedJoinMode) {
+      joinBtn.disabled = true;
+      setStatusMessage('Choose Local or Remote, then enter your name to join.');
+    }
+  }
+}
+
 function connect() {
   ws = new WebSocket(wsUrl());
 
   ws.addEventListener('open', () => {
     statusEl.textContent = 'Connected.';
+    send({ type: 'lobby' });
   });
 
   ws.addEventListener('close', () => {
@@ -474,6 +500,15 @@ function handleMessage(msg) {
       showGame();
 
       setStatusMessage('Joined. Waiting for game state...');
+      break;
+    }
+
+    case 'lobby': {
+      lobbyMode = msg.mode || null;
+      lobbyHostName = msg.players?.O || null;
+      if (!myMark) {
+        updatePreJoinUiFromLobby();
+      }
       break;
     }
 
@@ -647,8 +682,8 @@ function handleMessage(msg) {
 
 // Wire up UI
 joinBtn.addEventListener('click', () => {
-  if (joinBtn.disabled || !selectedJoinMode || !nameInput.value.trim()) return;
-  join(selectedJoinMode);
+  if (joinBtn.disabled || !(selectedJoinMode || lobbyMode) || !nameInput.value.trim()) return;
+  join(selectedJoinMode || lobbyMode);
 });
 nameInput.addEventListener('input', updateJoinButtonState);
 localBtn.addEventListener('click', () => setMode('local'));

@@ -133,6 +133,18 @@ async def send_state(to_ws: WebSocket, viewer_mark: Optional[Mark] = None, refre
     await to_ws.send_text(json.dumps(payload))
 
 
+async def send_lobby(to_ws: WebSocket) -> None:
+    """Send pre-join lobby info so clients can shape join UI."""
+    await to_ws.send_text(json.dumps({
+        "type": "lobby",
+        "mode": manager.mode,
+        "players": {
+            "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
+            "X": manager.players[Mark.X].name if Mark.X in manager.players else None,
+        },
+    }))
+
+
 async def broadcast_state(refresh: bool = False) -> None:
     """Send a full state snapshot to all connected clients."""
     for p in manager.players.values():
@@ -153,6 +165,7 @@ def game_over_message(winner: Optional[str]) -> str:
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     ws_id = str(uuid.uuid4())
+    await send_lobby(ws)
 
     try:
         while True:
@@ -189,9 +202,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 else:
                     # Local mode is single-device; block a second join immediately.
                     if manager.mode == "local":
+                        host_name = manager.players[Mark.O].name if Mark.O in manager.players else "Player 1"
                         await manager.send(ws, {
                             "type": "error",
-                            "message": "This game is in Local mode. A second player cannot join.",
+                            "message": f"{host_name} is playing Whisk in local mode so you can't join at this time.",
                         })
                         continue
                     # If second joiner selected a conflicting mode, fail fast with a clear message.
@@ -214,6 +228,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                 if mark == Mark.O and manager.mode is None:
                     await manager.send(ws, {"type": "need_mode", "message": "Choose Local or Remote."})
+
+            # --------------- LOBBY ---------------
+            elif mtype == "lobby":
+                await send_lobby(ws)
 
             # --------------- SET MODE ---------------
             elif mtype == "set_mode":

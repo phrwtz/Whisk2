@@ -406,6 +406,27 @@ def test_second_player_cannot_join_when_first_player_selected_local_mode():
 
         ws_x.send_json({"type": "join", "name": "Guest", "mode": "remote"})
         err = _recv_type(ws_x, "error")
-        assert err["message"] == "This game is in Local mode. A second player cannot join."
+        assert err["message"] == "Host is playing Whisk in local mode so you can't join at this time."
+
+    manager.reset()
+
+
+def test_lobby_message_exposes_host_and_mode_before_join():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o:
+        lobby0 = _recv_type(ws_o, "lobby")
+        assert lobby0["players"]["O"] is None
+        assert lobby0["mode"] is None
+
+        ws_o.send_json({"type": "join", "name": "Host", "mode": "remote"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        with client.websocket_connect("/ws") as ws_guest:
+            lobby_guest = _recv_type(ws_guest, "lobby")
+            assert lobby_guest["players"]["O"] == "Host"
+            assert lobby_guest["mode"] == "remote"
 
     manager.reset()
