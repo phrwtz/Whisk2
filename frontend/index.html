@@ -9,7 +9,10 @@
 <body>
   <header>
     <h1>Whisk</h1>
-    <div id="status">Connecting…</div>
+    <div>
+      <button class="ui-btn" id="instructionsBtn" type="button" disabled>Instructions</button>
+      <div id="status">Connecting…</div>
+    </div>
   </header>
 
   <section id="setup" class="card">
@@ -43,32 +46,9 @@
       </section>
     </div>
 
-    <div class="play-area">
-      <section class="card" id="instructionsCard">
-        <h2>How To Play</h2>
-        <h3>Remote (two computers)</h3>
-        <ul>
-          <li>Player 1 joins first and chooses Remote mode.</li>
-          <li>Player 2 joins from the same URL.</li>
-          <li>Both players choose a square each turn.</li>
-          <li>Moves reveal together when both have moved.</li>
-          <li>Build 3, 4, or 5 in a row to score points.</li>
-        </ul>
-
-        <h3>Local (one computer)</h3>
-        <ul>
-          <li>Player 1 joins and chooses Local mode.</li>
-          <li>One device alternates turns: O, then X, then O, etc.</li>
-          <li>Each click commits immediately in local mode.</li>
-          <li>Build 3, 4, or 5 in a row to score points.</li>
-          <li>First side to 50+ points wins.</li>
-        </ul>
-      </section>
-
-      <section class="card" id="boardCard">
-        <div id="board" class="board" aria-label="game board"></div>
-      </section>
-    </div>
+    <section class="card" id="boardCard">
+      <div id="board" class="board" aria-label="game board"></div>
+    </section>
   </main>
 
   <section id="celebration" class="celebration hidden" aria-live="polite">
@@ -78,6 +58,14 @@
       src="https://media.tenor.com/5ry-200hErMAAAAM/happy-birthday-to-you-kids.gif"
     />
     <div id="celebrationText"></div>
+  </section>
+
+  <section id="instructionsModal" class="instructions-modal hidden" aria-live="polite">
+    <div class="instructions-panel">
+      <h2 id="instructionsTitle">Instructions</h2>
+      <div id="instructionsBody" class="instructions-body"></div>
+      <button class="ui-btn" id="closeInstructionsBtn" type="button">Close</button>
+    </div>
   </section>
 
   <button class="ui-btn new-game-fab hidden" id="newGameBtn" type="button">New Game</button>

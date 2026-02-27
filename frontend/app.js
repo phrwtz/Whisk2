@@ -19,6 +19,11 @@ const gameEl = document.getElementById('game');
 
 const nameInput = document.getElementById('nameInput');
 const joinBtn = document.getElementById('joinBtn');
+const instructionsBtn = document.getElementById('instructionsBtn');
+const instructionsModalEl = document.getElementById('instructionsModal');
+const instructionsTitleEl = document.getElementById('instructionsTitle');
+const instructionsBodyEl = document.getElementById('instructionsBody');
+const closeInstructionsBtn = document.getElementById('closeInstructionsBtn');
 
 const modePicker = document.getElementById('modePicker');
 const modeLabel = document.getElementById('modeLabel');
@@ -60,11 +65,34 @@ let highlightedCells = new Set();
 let lastKnownPlayers = { O: null, X: null };
 let opponentJoinAnnounced = false;
 
+const LOCAL_INSTRUCTIONS = [
+  'Whisk is a variant of Tic Tac Toe with some important differences:',
+  'It is played on an 8 by 8, rather than 3 by 3, board.',
+  'Players get points for getting 3, 4, or 5 of their icons in a row: 1 point for 3 in a row, 4 points for 4 in a row, and nine points for 5 in a row.',
+  'The game ends when either player gets 50 or more points.',
+  "Neither player can get more than 5 icons in a row due to a unique feature of Whisk: when a player places a sixth icon on the board, the oldest icon disappears, leaving just the five most recent ones. As a visual reminder of this, the icons will fade progressively as new ones are placed.",
+  'You are now playing the game in local mode, meaning that both players are on the same computer. Players alternate moves by clicking on empty squares to place their icon. The first player to move will automatically be assigned the O icon, the second player will be X.',
+];
+
+const REMOTE_INSTRUCTIONS = [
+  'Whisk is a variant of Tic Tac Toe with some important differences:',
+  'It is played on an 8 by 8, rather than 3 by 3, board.',
+  'Players get points for getting 3, 4, or 5 of their icons in a row: 1 point for 3 in a row, 4 points for 4 in a row, and nine points for 5 in a row.',
+  'The game ends when either player gets 50 or more points.',
+  "Neither player can get more than 5 icons in a row due to a unique feature of Whisk: when a player places a sixth icon on the board, the oldest icon disappears, leaving just the five most recent ones. As a visual reminder of this, the icons will fade progressively as new ones are placed.",
+  "You are now playing the game in remote mode, meaning that the players are on two different computers and cannot see each other's screen. Whisk takes advantage of this fact to eliminate the advantage that the first player often enjoys in a game of this kind and has the players move, in effect, simultaneously. The first player to make a move sees that move as expected but the second player's screen is not updated until they have made a move. If the second player clicks on the same square that the first player chose, that results in an error message and the player can try again.",
+];
+
 function updateJoinButtonState() {
   if (!joinBtn) return;
   const hasName = !!nameInput?.value.trim();
   const hasMode = !!selectedJoinMode || !!lobbyMode;
   joinBtn.disabled = !(hasName && hasMode);
+}
+
+function updateInstructionsButtonState() {
+  if (!instructionsBtn) return;
+  instructionsBtn.disabled = !(myMark && modeChosen);
 }
 
 function showSetup() {
@@ -78,6 +106,7 @@ function showGame() {
   setupEl.classList.add('hidden');
   gameEl.classList.remove('hidden');
   if (newGameBtn) newGameBtn.classList.remove('hidden');
+  updateInstructionsButtonState();
 }
 
 function wsUrl() {
@@ -141,6 +170,21 @@ function setStatusHtml(html) {
   }
   if (!messagesEl) return;
   messagesEl.innerHTML = html;
+}
+
+function openInstructionsModal() {
+  if (!instructionsModalEl || !instructionsTitleEl || !instructionsBodyEl) return;
+  if (!modeChosen) return;
+  const isLocal = modeChosen === 'local';
+  const lines = isLocal ? LOCAL_INSTRUCTIONS : REMOTE_INSTRUCTIONS;
+  instructionsTitleEl.textContent = isLocal ? 'Local Mode Instructions' : 'Remote Mode Instructions';
+  instructionsBodyEl.innerHTML = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+  instructionsModalEl.classList.remove('hidden');
+}
+
+function closeInstructionsModal() {
+  if (!instructionsModalEl) return;
+  instructionsModalEl.classList.add('hidden');
 }
 
 function updateModePanels() {
@@ -482,6 +526,7 @@ function updatePreJoinUiFromLobby() {
       setStatusMessage('Enter your name and choose whether you want to play the game locally or remotely, then click Join.');
     }
   }
+  updateInstructionsButtonState();
 }
 
 function connect() {
@@ -512,6 +557,7 @@ function handleMessage(msg) {
       opponentJoinAnnounced = false;
       // Always show the board as soon as a player joins.
       showGame();
+      updateInstructionsButtonState();
 
       setStatusMessage('Joined. Waiting for game state...');
       break;
@@ -534,6 +580,7 @@ function handleMessage(msg) {
       modeChosen = msg.mode;
       showGame();
       updateModePanels();
+      updateInstructionsButtonState();
       setStatusMessage(computeTurnMessage());
       break;
 
@@ -652,6 +699,7 @@ function handleMessage(msg) {
       if (msg.mode) {
         modeChosen = msg.mode;
         updateModePanels();
+        updateInstructionsButtonState();
       }
       if (msg.local_next_mark) {
         localNextMark = msg.local_next_mark;
@@ -710,8 +758,21 @@ if (newGameBtn) {
   });
 }
 
+if (instructionsBtn) {
+  instructionsBtn.addEventListener('click', openInstructionsModal);
+}
+if (closeInstructionsBtn) {
+  closeInstructionsBtn.addEventListener('click', closeInstructionsModal);
+}
+if (instructionsModalEl) {
+  instructionsModalEl.addEventListener('click', (evt) => {
+    if (evt.target === instructionsModalEl) closeInstructionsModal();
+  });
+}
+
 // Init
 createBoard();
 updateModePanels();
 updateJoinButtonState();
+updateInstructionsButtonState();
 connect();

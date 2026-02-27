@@ -46,6 +46,8 @@ h2 {
 #status {
   color: var(--muted);
   font-size: 14px;
+  margin-top: 6px;
+  text-align: right;
 }
 
 .hidden { display: none !important; }
@@ -171,43 +173,6 @@ input {
 .msg-player-o { color: var(--o-color); font-weight: 700; }
 .msg-player-x { color: var(--x-color); font-weight: 700; }
 
-.play-area {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  margin: 0 12px;
-}
-
-@media (min-width: 980px) {
-  .play-area {
-    grid-template-columns: 320px minmax(0, 1fr);
-    align-items: start;
-  }
-}
-
-#instructionsCard {
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.55), transparent 42%),
-    #fff8e8;
-  border: 3px solid #c68252;
-}
-
-#instructionsCard h3 {
-  margin: 10px 0 6px;
-  font-size: 16px;
-}
-
-#instructionsCard ul {
-  margin: 0 0 8px 18px;
-  padding: 0;
-  font-size: 15px;
-  line-height: 1.35;
-}
-
-#instructionsCard li {
-  margin-bottom: 4px;
-}
-
 .board {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
@@ -331,6 +296,32 @@ input {
 .move-hand.dropping .move-hand-token {
   transform: translateY(10px) scale(0.9);
   transition: transform 140ms ease-in;
+}
+
+.instructions-modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(32, 17, 9, 0.45);
+  z-index: 50;
+}
+
+.instructions-panel {
+  width: min(760px, 94vw);
+  max-height: 86vh;
+  overflow: auto;
+  background: #fffdf3;
+  border: 3px solid #c68252;
+  border-radius: 16px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  padding: 16px;
+}
+
+.instructions-body p {
+  margin: 0 0 10px;
+  line-height: 1.4;
+  font-size: 16px;
 }
 
 @media (max-width: 640px) {
