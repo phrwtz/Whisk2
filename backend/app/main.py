@@ -55,6 +55,7 @@ class GameManager:
         self.state = GameState()
         self.players: Dict[Mark, PlayerConn] = {}
         self.ws_to_mark: Dict[str, Mark] = {}
+        self.lobby_clients: Dict[str, WebSocket] = {}
         self.mode: Optional[str] = None  # 'remote' or 'local'
         self.game_over = False
         self.local_next_mark = Mark.O
@@ -145,6 +146,16 @@ async def send_lobby(to_ws: WebSocket) -> None:
     }))
 
 
+async def broadcast_lobby() -> None:
+    """Push lobby updates to clients that are connected but not yet joined."""
+    for ws in list(manager.lobby_clients.values()):
+        try:
+            await send_lobby(ws)
+        except Exception:
+            # stale sockets are cleaned up on disconnect; ignore send races
+            pass
+
+
 async def broadcast_state(refresh: bool = False) -> None:
     """Send a full state snapshot to all connected clients."""
     for p in manager.players.values():
@@ -165,6 +176,7 @@ def game_over_message(winner: Optional[str]) -> str:
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     ws_id = str(uuid.uuid4())
+    manager.lobby_clients[ws_id] = ws
     await send_lobby(ws)
 
     try:
@@ -222,9 +234,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                 manager.players[mark] = PlayerConn(ws=ws, name=name, mark=mark)
                 manager.ws_to_mark[ws_id] = mark
+                manager.lobby_clients.pop(ws_id, None)
 
                 await manager.send(ws, {"type": "joined", "mark": mark.value})
                 await broadcast_state()
+                await broadcast_lobby()
 
                 if mark == Mark.O and manager.mode is None:
                     await manager.send(ws, {"type": "need_mode", "message": "Choose Local or Remote."})
@@ -253,6 +267,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if mode == "local":
                     manager.local_next_mark = Mark.O
                 await broadcast_state()
+                await broadcast_lobby()
 
             # --------------- MOVE ---------------
             elif mtype == "move":
@@ -363,11 +378,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await manager.send(ws, {"type": "error", "message": f"Unknown message type: {mtype}"})
 
     except WebSocketDisconnect:
+        manager.lobby_clients.pop(ws_id, None)
         mark = manager.ws_to_mark.pop(ws_id, None)
         if mark and mark in manager.players:
             del manager.players[mark]
             manager.state.pending[mark] = None
             await broadcast_state()
+            await broadcast_lobby()
             manager.reset_on_next_join = True
 
         if not manager.players:

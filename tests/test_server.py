@@ -430,3 +430,24 @@ def test_lobby_message_exposes_host_and_mode_before_join():
             assert lobby_guest["mode"] == "remote"
 
     manager.reset()
+
+
+def test_unjoined_client_gets_lobby_update_when_first_player_joins():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_waiting, client.websocket_connect("/ws") as ws_host:
+        # Initial lobby snapshots on connect.
+        _recv_type(ws_waiting, "lobby")
+        _recv_type(ws_host, "lobby")
+
+        ws_host.send_json({"type": "join", "name": "Host", "mode": "remote"})
+        _recv_type(ws_host, "joined")
+        _recv_type(ws_host, "state")
+
+        # Waiting (not joined) client should be pushed an updated lobby view.
+        lobby_update = _recv_type(ws_waiting, "lobby")
+        assert lobby_update["players"]["O"] == "Host"
+        assert lobby_update["mode"] == "remote"
+
+    manager.reset()

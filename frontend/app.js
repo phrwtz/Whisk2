@@ -21,6 +21,7 @@ const nameInput = document.getElementById('nameInput');
 const joinBtn = document.getElementById('joinBtn');
 
 const modePicker = document.getElementById('modePicker');
+const modeLabel = document.getElementById('modeLabel');
 const localBtn = document.getElementById('localBtn');
 const remoteBtn = document.getElementById('remoteBtn');
 
@@ -465,6 +466,7 @@ function updatePreJoinUiFromLobby() {
 
   if (hostPresent) {
     if (modePicker) modePicker.classList.add('hidden');
+    if (modeLabel) modeLabel.classList.add('hidden');
     selectedJoinMode = lobbyMode || selectedJoinMode;
     updateJoinButtonState();
     if (lobbyMode === 'local') {
@@ -474,9 +476,10 @@ function updatePreJoinUiFromLobby() {
     }
   } else {
     if (modePicker) modePicker.classList.remove('hidden');
+    if (modeLabel) modeLabel.classList.remove('hidden');
     if (!selectedJoinMode) {
       joinBtn.disabled = true;
-      setStatusMessage('Choose Local or Remote, then enter your name to join.');
+      setStatusMessage('Enter your name and choose whether you want to play the game locally or remotely, then click Join.');
     }
   }
 }
