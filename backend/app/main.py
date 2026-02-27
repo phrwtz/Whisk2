@@ -163,6 +163,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
             # --------------- JOIN ---------------
             if mtype == "join":
                 name = (msg.get("name") or "").strip() or "Player"
+                requested_mode = msg.get("mode")
+                if requested_mode not in ("remote", "local"):
+                    requested_mode = None
 
                 manager.prune_disconnected()
 
@@ -181,9 +184,27 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                 # First player (O) may request a mode (or leave None)
                 if mark == Mark.O:
-                    requested_mode = msg.get("mode")
                     if requested_mode in ("remote", "local"):
                         manager.mode = requested_mode
+                else:
+                    # Local mode is single-device; block a second join immediately.
+                    if manager.mode == "local":
+                        await manager.send(ws, {
+                            "type": "error",
+                            "message": "This game is in Local mode. A second player cannot join.",
+                        })
+                        continue
+                    # If second joiner selected a conflicting mode, fail fast with a clear message.
+                    if (
+                        requested_mode in ("remote", "local")
+                        and manager.mode in ("remote", "local")
+                        and requested_mode != manager.mode
+                    ):
+                        await manager.send(ws, {
+                            "type": "error",
+                            "message": f"Mode mismatch. This game is set to {manager.mode}.",
+                        })
+                        continue
 
                 manager.players[mark] = PlayerConn(ws=ws, name=name, mark=mark)
                 manager.ws_to_mark[ws_id] = mark

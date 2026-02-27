@@ -393,3 +393,19 @@ def test_remote_scoring_only_counts_lines_created_by_latest_own_move():
         assert s5_o["scores"] == {"O": 1, "X": 5}
 
     manager.reset()
+
+
+def test_second_player_cannot_join_when_first_player_selected_local_mode():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Host", "mode": "local"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_x.send_json({"type": "join", "name": "Guest", "mode": "remote"})
+        err = _recv_type(ws_x, "error")
+        assert err["message"] == "This game is in Local mode. A second player cannot join."
+
+    manager.reset()
