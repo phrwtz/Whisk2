@@ -10,7 +10,6 @@
   <header>
     <h1>Whisk</h1>
     <div>
-      <button class="ui-btn hidden" id="instructionsBtnGame" type="button" disabled>Instructions</button>
       <div id="status">Connecting…</div>
     </div>
   </header>
@@ -50,6 +49,10 @@
     </div>
 
     <section class="card" id="boardCard">
+      <div class="board-controls">
+        <button class="ui-btn hidden" id="instructionsBtnGame" type="button" disabled>Instructions</button>
+        <button class="ui-btn hidden" id="newGameBtn" type="button">New Game</button>
+      </div>
       <div id="board" class="board" aria-label="game board"></div>
     </section>
   </main>
@@ -70,8 +73,6 @@
       <button class="ui-btn" id="closeInstructionsBtn" type="button">Close</button>
     </div>
   </section>
-
-  <button class="ui-btn new-game-fab hidden" id="newGameBtn" type="button">New Game</button>
 
   <script src="/static/app.js"></script>
 </body>

@@ -73,6 +73,7 @@ const LOCAL_INSTRUCTIONS = [
   'The game ends when either player gets 50 or more points.',
   "Neither player can get more than 5 icons in a row due to a unique feature of Whisk: when a player places a sixth icon on the board, the oldest icon disappears, leaving just the five most recent ones. As a visual reminder of this, the icons will fade progressively as new ones are placed.",
   'You are now playing the game in local mode, meaning that both players are on the same computer. Players alternate moves by clicking on empty squares to place their icon. The first player to move will automatically be assigned the O icon, the second player will be X.',
+  'Click on "Join" to start the game.',
 ];
 
 const REMOTE_INSTRUCTIONS = [
@@ -82,6 +83,7 @@ const REMOTE_INSTRUCTIONS = [
   'The game ends when either player gets 50 or more points.',
   "Neither player can get more than 5 icons in a row due to a unique feature of Whisk: when a player places a sixth icon on the board, the oldest icon disappears, leaving just the five most recent ones. As a visual reminder of this, the icons will fade progressively as new ones are placed.",
   "You are now playing the game in remote mode, meaning that the players are on two different computers and cannot see each other's screen. Whisk takes advantage of this fact to eliminate the advantage that the first player often enjoys in a game of this kind and has the players move, in effect, simultaneously. The first player to make a move sees that move as expected but the second player's screen is not updated until they have made a move. If the second player clicks on the same square that the first player chose, that results in an error message and the player can try again.",
+  'Click on "Join" to join the game.',
 ];
 
 function updateJoinButtonState() {

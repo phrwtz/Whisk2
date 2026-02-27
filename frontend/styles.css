@@ -47,7 +47,7 @@ h2 {
   color: var(--muted);
   font-size: 14px;
   margin-top: 6px;
-  text-align: right;
+  text-align: left;
 }
 
 .hidden { display: none !important; }
@@ -214,14 +214,12 @@ input {
   opacity: 0.98;
 }
 
-.new-game-fab {
-  position: fixed;
-  right: 12px;
-  bottom: 12px;
-  z-index: 25;
-  min-width: 124px;
-  background: linear-gradient(180deg, #f7ffd9, #d9f9ad);
-  border: 3px solid #5b8a17;
+.board-controls {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  margin: 0 auto 10px;
+  width: min(560px, calc(100vw - 44px));
 }
 
 .celebration {
@@ -334,10 +332,5 @@ input {
   body { padding-bottom: 108px; }
   .card { margin: 8px; padding: 12px; }
   .board { width: calc(100vw - 24px); gap: 4px; padding: 6px; }
-  .new-game-fab {
-    left: 8px;
-    right: 8px;
-    width: auto;
-    bottom: 8px;
-  }
+  .board-controls { width: calc(100vw - 24px); }
 }
