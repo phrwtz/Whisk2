@@ -19,7 +19,8 @@ const gameEl = document.getElementById('game');
 
 const nameInput = document.getElementById('nameInput');
 const joinBtn = document.getElementById('joinBtn');
-const instructionsBtn = document.getElementById('instructionsBtn');
+const instructionsBtnSetup = document.getElementById('instructionsBtnSetup');
+const instructionsBtnGame = document.getElementById('instructionsBtnGame');
 const instructionsModalEl = document.getElementById('instructionsModal');
 const instructionsTitleEl = document.getElementById('instructionsTitle');
 const instructionsBodyEl = document.getElementById('instructionsBody');
@@ -88,11 +89,25 @@ function updateJoinButtonState() {
   const hasName = !!nameInput?.value.trim();
   const hasMode = !!selectedJoinMode || !!lobbyMode;
   joinBtn.disabled = !(hasName && hasMode);
+  updateInstructionsButtonState();
+}
+
+function instructionsMode() {
+  return modeChosen || selectedJoinMode || lobbyMode;
 }
 
 function updateInstructionsButtonState() {
-  if (!instructionsBtn) return;
-  instructionsBtn.disabled = !(myMark && modeChosen);
+  const preJoinActive = !myMark && !joinBtn.disabled && !!instructionsMode();
+  if (instructionsBtnSetup) {
+    instructionsBtnSetup.classList.toggle('hidden', !preJoinActive);
+    instructionsBtnSetup.disabled = !preJoinActive;
+  }
+
+  const inGameActive = !!(myMark && modeChosen);
+  if (instructionsBtnGame) {
+    instructionsBtnGame.classList.toggle('hidden', !inGameActive);
+    instructionsBtnGame.disabled = !inGameActive;
+  }
 }
 
 function showSetup() {
@@ -174,8 +189,9 @@ function setStatusHtml(html) {
 
 function openInstructionsModal() {
   if (!instructionsModalEl || !instructionsTitleEl || !instructionsBodyEl) return;
-  if (!modeChosen) return;
-  const isLocal = modeChosen === 'local';
+  const activeMode = instructionsMode();
+  if (!activeMode) return;
+  const isLocal = activeMode === 'local';
   const lines = isLocal ? LOCAL_INSTRUCTIONS : REMOTE_INSTRUCTIONS;
   instructionsTitleEl.textContent = isLocal ? 'Local Mode Instructions' : 'Remote Mode Instructions';
   instructionsBodyEl.innerHTML = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
@@ -758,8 +774,11 @@ if (newGameBtn) {
   });
 }
 
-if (instructionsBtn) {
-  instructionsBtn.addEventListener('click', openInstructionsModal);
+if (instructionsBtnSetup) {
+  instructionsBtnSetup.addEventListener('click', openInstructionsModal);
+}
+if (instructionsBtnGame) {
+  instructionsBtnGame.addEventListener('click', openInstructionsModal);
 }
 if (closeInstructionsBtn) {
   closeInstructionsBtn.addEventListener('click', closeInstructionsModal);

@@ -104,6 +104,12 @@ h2 {
   font-weight: 700;
 }
 
+.setup-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 label {
   display: block;
   margin: 8px 0 12px;

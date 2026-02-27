@@ -10,7 +10,7 @@
   <header>
     <h1>Whisk</h1>
     <div>
-      <button class="ui-btn" id="instructionsBtn" type="button" disabled>Instructions</button>
+      <button class="ui-btn hidden" id="instructionsBtnGame" type="button" disabled>Instructions</button>
       <div id="status">Connecting…</div>
     </div>
   </header>
@@ -30,7 +30,10 @@
       <button id="remoteBtn" class="ui-btn" type="button">Remote (two computers)</button>
     </div>
 
-    <button id="joinBtn" class="ui-btn" type="button" disabled>Join</button>
+    <div class="setup-actions">
+      <button id="instructionsBtnSetup" class="ui-btn hidden" type="button" disabled>Instructions</button>
+      <button id="joinBtn" class="ui-btn" type="button" disabled>Join</button>
+    </div>
   </section>
 
   <main class="hidden" id="game">
