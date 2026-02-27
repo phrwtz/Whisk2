@@ -56,10 +56,18 @@ let highlightedCells = new Set();
 let lastKnownPlayers = { O: null, X: null };
 let opponentJoinAnnounced = false;
 
+function updateJoinButtonState() {
+  if (!joinBtn) return;
+  const hasName = !!nameInput?.value.trim();
+  const hasMode = !!selectedJoinMode;
+  joinBtn.disabled = !(hasName && hasMode);
+}
+
 function showSetup() {
   setupEl.classList.remove('hidden');
   gameEl.classList.add('hidden');
   if (newGameBtn) newGameBtn.classList.add('hidden');
+  updateJoinButtonState();
 }
 
 function showGame() {
@@ -413,7 +421,7 @@ function setMode(mode) {
   // Pre-join mode selection is required before enabling Join.
   if (!myMark) {
     selectedJoinMode = mode;
-    if (joinBtn) joinBtn.disabled = false;
+    updateJoinButtonState();
     if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === 'local');
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === 'remote');
     return;
@@ -634,9 +642,10 @@ function handleMessage(msg) {
 
 // Wire up UI
 joinBtn.addEventListener('click', () => {
-  if (!selectedJoinMode) return;
+  if (joinBtn.disabled || !selectedJoinMode || !nameInput.value.trim()) return;
   join(selectedJoinMode);
 });
+nameInput.addEventListener('input', updateJoinButtonState);
 localBtn.addEventListener('click', () => setMode('local'));
 remoteBtn.addEventListener('click', () => setMode('remote'));
 
@@ -650,4 +659,5 @@ if (newGameBtn) {
 // Init
 createBoard();
 updateModePanels();
+updateJoinButtonState();
 connect();
