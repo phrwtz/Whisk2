@@ -451,3 +451,32 @@ def test_unjoined_client_gets_lobby_update_when_first_player_joins():
         assert lobby_update["mode"] == "remote"
 
     manager.reset()
+
+
+def test_second_player_can_start_new_local_session_when_first_is_local():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_first, client.websocket_connect("/ws") as ws_second:
+        _recv_type(ws_first, "lobby")
+        _recv_type(ws_second, "lobby")
+
+        ws_first.send_json({"type": "join", "name": "First", "mode": "local"})
+        _recv_type(ws_first, "joined")
+        _recv_type(ws_first, "state")
+        _recv_type(ws_second, "lobby")
+
+        # Second player chooses local and should be admitted as new local host (O).
+        ws_second.send_json({"type": "join", "name": "Second", "mode": "local"})
+        joined = _recv_type(ws_second, "joined")
+        assert joined["mark"] == "O"
+        state2 = _recv_type(ws_second, "state")
+        assert state2["players"]["O"] == "Second"
+        assert state2["mode"] == "local"
+
+        # Original first player is no longer joined in this game session.
+        ws_first.send_json({"type": "move", "row": 0, "col": 0})
+        err = _recv_type(ws_first, "error")
+        assert err["message"] == "You must join first."
+
+    manager.reset()

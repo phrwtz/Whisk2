@@ -212,8 +212,21 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     if requested_mode in ("remote", "local"):
                         manager.mode = requested_mode
                 else:
+                    # If current host is in local mode and joiner chooses local, hand off
+                    # local ownership so the joiner can run their own local game.
+                    if manager.mode == "local" and requested_mode == "local":
+                        # Move the existing local owner back to lobby (same socket stays connected).
+                        for old_ws_id, old_mark in list(manager.ws_to_mark.items()):
+                            if old_mark == Mark.O and Mark.O in manager.players:
+                                manager.lobby_clients[old_ws_id] = manager.players[Mark.O].ws
+                                manager.ws_to_mark.pop(old_ws_id, None)
+                        manager.players.pop(Mark.O, None)
+                        manager.reset_game_state_only()
+                        manager.mode = "local"
+                        mark = Mark.O
+
                     # Local mode is single-device; block a second join immediately.
-                    if manager.mode == "local":
+                    if manager.mode == "local" and Mark.O in manager.players:
                         host_name = manager.players[Mark.O].name if Mark.O in manager.players else "Player 1"
                         await manager.send(ws, {
                             "type": "error",

@@ -470,7 +470,7 @@ function updatePreJoinUiFromLobby() {
     selectedJoinMode = lobbyMode || selectedJoinMode;
     updateJoinButtonState();
     if (lobbyMode === 'local') {
-      setStatusMessage(`${lobbyHostName} is playing Whisk in local mode so you can't join at this time.`);
+      setStatusMessage(`${lobbyHostName} is playing Whisk in local mode so you can't join at this time. But you are welcome to play in local mode. Just enter your name and click "Join".`);
     } else if (lobbyMode === 'remote') {
       setStatusMessage(`Please join ${lobbyHostName} to play Whisk.`);
     }
