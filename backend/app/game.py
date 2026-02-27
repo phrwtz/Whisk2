@@ -153,6 +153,20 @@ def scoring_coords_for_pending_move(
     return coords
 
 
+def score_for_move(
+    occ: Dict[Coord, Mark], mark: Mark, move_coord: Coord
+) -> int:
+    """Return points created by `mark`'s most recent move at `move_coord`."""
+    score = 0
+    for length, points in ((3, 1), (4, 4), (5, 9)):
+        count = 0
+        for line in _scoring_line_windows(occ, mark, length):
+            if move_coord in line:
+                count += 1
+        score += count * points
+    return score
+
+
 def count_exact_lines(occ: Dict[Coord, Mark], mark: Mark, length: int) -> int:
     """Count lines of exactly `length` for `mark`.
 
@@ -226,7 +240,7 @@ def scores_for_client(state: GameState, viewer_mark: Optional[Mark] = None) -> D
 
     view_queues = _view_piece_queues(state, viewer_mark)
     view_occ = _occupancy_from_queues(view_queues)
-    scores[viewer_mark] += score_for_board(view_occ, viewer_mark)
+    scores[viewer_mark] += score_for_move(view_occ, viewer_mark, state.pending[viewer_mark])  # type: ignore[arg-type]
     return scores
 
 
@@ -311,13 +325,16 @@ def commit_turn(state: GameState) -> Dict[str, object]:
     state.pending[Mark.O] = None
     state.pending[Mark.X] = None
 
-    # Recalculate board and add points for this position.
+    # Recalculate board and add points created by each player's latest move.
     occ = state.board_occupancy()
-    add_o = score_for_board(occ, Mark.O)
-    add_x = score_for_board(occ, Mark.X)
+    add_o = score_for_move(occ, Mark.O, (revealed[Mark.O].row, revealed[Mark.O].col))
+    add_x = score_for_move(occ, Mark.X, (revealed[Mark.X].row, revealed[Mark.X].col))
     state.scores[Mark.O] += add_o
     state.scores[Mark.X] += add_x
-    state.last_highlighted_cells = scoring_coords_for_board(occ)
+    state.last_highlighted_cells = (
+        scoring_coords_for_pending_move(occ, Mark.O, (revealed[Mark.O].row, revealed[Mark.O].col))
+        | scoring_coords_for_pending_move(occ, Mark.X, (revealed[Mark.X].row, revealed[Mark.X].col))
+    )
     state.highlight_visible_for = {Mark.O, Mark.X}
 
     done = state.scores[Mark.O] >= 50 or state.scores[Mark.X] >= 50
@@ -366,9 +383,9 @@ def commit_single_move(state: GameState, mark: Mark) -> Dict[str, object]:
     occ = state.board_occupancy()
     # Local mode commits one mark at a time, so only the moving mark
     # should receive points for this move.
-    add_mark = score_for_board(occ, mark)
+    add_mark = score_for_move(occ, mark, (p.row, p.col))
     state.scores[mark] += add_mark
-    state.last_highlighted_cells = scoring_coords_for_board(occ)
+    state.last_highlighted_cells = scoring_coords_for_pending_move(occ, mark, (p.row, p.col))
     state.highlight_visible_for = {Mark.O, Mark.X}
 
     done = state.scores[Mark.O] >= 50 or state.scores[Mark.X] >= 50

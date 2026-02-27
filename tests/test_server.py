@@ -345,3 +345,51 @@ def test_remote_score_event_sent_only_to_scoring_player():
         assert all(m.get("type") != "score_event" for m in x_msgs)
 
     manager.reset()
+
+
+def test_remote_scoring_only_counts_lines_created_by_latest_own_move():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Olive", "mode": "remote"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_x.send_json({"type": "join", "name": "Xavier"})
+        _recv_type(ws_x, "joined")
+        _recv_type(ws_x, "state")
+        _recv_type(ws_o, "state")
+
+        def play_turn(o_coord, x_coord):
+            ws_o.send_json({"type": "move", "row": o_coord[0], "col": o_coord[1]})
+            _recv_pending_flags(ws_o)
+            _recv_pending_flags(ws_x)
+            ws_x.send_json({"type": "move", "row": x_coord[0], "col": x_coord[1]})
+            s_o = _recv_state_where(ws_o, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
+            s_x = _recv_state_where(ws_x, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
+            _recv_type(ws_o, "turn_committed")
+            _recv_type(ws_x, "turn_committed")
+            return s_o, s_x
+
+        # No one scores yet.
+        s1_o, _ = play_turn((0, 0), (7, 7))
+        assert s1_o["scores"] == {"O": 0, "X": 0}
+
+        s2_o, _ = play_turn((0, 1), (7, 6))
+        assert s2_o["scores"] == {"O": 0, "X": 0}
+
+        # Both latest moves complete a 3-in-a-row, so both should score +1.
+        s3_o, _ = play_turn((0, 2), (7, 5))
+        assert s3_o["scores"] == {"O": 1, "X": 1}
+
+        # O does NOT keep scoring from the old 3-line; X scores +4 for new 4-line.
+        s4_o, _ = play_turn((2, 2), (7, 4))
+        assert s4_o["scores"]["O"] == 1
+        assert s4_o["scores"]["X"] == 5
+
+        # X move should not award O points, and O move should not award X points.
+        s5_o, _ = play_turn((2, 3), (6, 0))
+        assert s5_o["scores"] == {"O": 1, "X": 5}
+
+    manager.reset()
