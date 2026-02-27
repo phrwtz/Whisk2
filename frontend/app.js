@@ -681,6 +681,8 @@ function handleMessage(msg) {
       break;
 
     case 'state': {
+      const prevPending = { ...pendingFlags };
+
       if (msg.players) {
         const prevO = lastKnownPlayers.O;
         const prevX = lastKnownPlayers.X;
@@ -728,7 +730,18 @@ function handleMessage(msg) {
       }
 
       if (msg.pieces) {
-        const appearing = detectAppearingPieces(msg.pieces);
+        let appearing = detectAppearingPieces(msg.pieces);
+        // Remote-mode special case: when X is the second mover, O's piece may
+        // appear only as a reveal of an already-placed move. Skip animation.
+        if (
+          modeChosen === 'remote' &&
+          msg.refresh &&
+          myMark === 'X' &&
+          prevPending.X &&
+          !msg.pending?.X
+        ) {
+          appearing = appearing.filter((p) => p.mark !== 'O');
+        }
         serverPieces = msg.pieces;
         queueMoveAnimations(appearing);
       }
