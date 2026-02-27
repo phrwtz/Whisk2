@@ -236,12 +236,17 @@ function rowLengthFromScore(addedScore) {
 
 function showScoreFlash(mark, addedScore) {
   if (addedScore <= 0) return;
-  const rowLen = rowLengthFromScore(addedScore);
   const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
+  let flashText = '';
+  if (addedScore === 2) {
+    flashText = 'You got 3 in a row two different ways! You scored 2 points!';
+  } else {
+    const rowLen = rowLengthFromScore(addedScore);
+    const pointWord = addedScore === 1 ? 'point' : 'points';
+    flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
+  }
   isScoreFlashActive = true;
-  setStatusHtml(
-    `<span class="${cls}">You got ${rowLen} in a row! You just added ${addedScore} to your score!</span>`
-  );
+  setStatusHtml(`<span class="${cls}">${flashText}</span>`);
   if (scoreFlashTimer) {
     window.clearTimeout(scoreFlashTimer);
   }
