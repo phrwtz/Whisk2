@@ -53,6 +53,7 @@ let scoreFlashTimer = null;
 let isScoreFlashActive = false;
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
+let suppressOpponentRevealAnimationOnce = false;
 
 let players = { O: null, X: null }; // backend sends strings or null
 let scores = { O: 0, X: 0 };        // backend sends {O: number, X: number}
@@ -494,6 +495,10 @@ function render() {
 
 function onCellClick(r, c) {
   if (!myMark || isGameOver) return;
+  if (modeChosen === 'remote') {
+    const oppMark = myMark === 'O' ? 'X' : 'O';
+    suppressOpponentRevealAnimationOnce = !!pendingFlags[oppMark];
+  }
   send({ type: 'move', row: r, col: c });
 }
 
@@ -681,8 +686,6 @@ function handleMessage(msg) {
       break;
 
     case 'state': {
-      const prevPending = { ...pendingFlags };
-
       if (msg.players) {
         const prevO = lastKnownPlayers.O;
         const prevX = lastKnownPlayers.X;
@@ -738,10 +741,10 @@ function handleMessage(msg) {
           modeChosen === 'remote' &&
           msg.refresh &&
           myMark &&
-          prevPending[myMark] &&
-          !msg.pending?.[myMark]
+          suppressOpponentRevealAnimationOnce
         ) {
           appearing = appearing.filter((p) => p.mark === myMark);
+          suppressOpponentRevealAnimationOnce = false;
         }
         serverPieces = msg.pieces;
         queueMoveAnimations(appearing);
