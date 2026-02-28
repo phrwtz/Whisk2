@@ -731,16 +731,17 @@ function handleMessage(msg) {
 
       if (msg.pieces) {
         let appearing = detectAppearingPieces(msg.pieces);
-        // Remote-mode special case: when X is the second mover, O's piece may
-        // appear only as a reveal of an already-placed move. Skip animation.
+        // Remote-mode special case: when you're the second mover, the
+        // opponent's piece may appear only as a reveal of an already-placed
+        // move. Animate only your own newly committed piece.
         if (
           modeChosen === 'remote' &&
           msg.refresh &&
-          myMark === 'X' &&
-          prevPending.X &&
-          !msg.pending?.X
+          myMark &&
+          prevPending[myMark] &&
+          !msg.pending?.[myMark]
         ) {
-          appearing = appearing.filter((p) => p.mark !== 'O');
+          appearing = appearing.filter((p) => p.mark === myMark);
         }
         serverPieces = msg.pieces;
         queueMoveAnimations(appearing);
