@@ -373,6 +373,27 @@ def test_commit_turn_both_reach_50_plus_is_tie():
 
     assert summary["done"] is True
     assert summary["winner"] == "TIE"
+
+
+def test_commit_turn_both_50_plus_but_unequal_not_tie():
+    state = GameState()
+
+    # Build a simple board with no immediate scoring lines.
+    apply_move(state, Mark.O, 0, 0)
+    apply_move(state, Mark.X, 7, 7)
+    commit_turn(state)
+
+    # Force both >= 50 but unequal.
+    state.scores[Mark.O] = 50
+    state.scores[Mark.X] = 51
+
+    # Neutral commit with no scoring changes.
+    apply_move(state, Mark.O, 1, 2)
+    apply_move(state, Mark.X, 6, 5)
+    summary = commit_turn(state)
+
+    assert summary["done"] is True
+    assert summary["winner"] == "X"
     client = TestClient(app)
 
     with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:

@@ -340,11 +340,15 @@ def commit_turn(state: GameState) -> Dict[str, object]:
     done = state.scores[Mark.O] >= 50 or state.scores[Mark.X] >= 50
     winner: Optional[str] = None
     if done:
-        # In remote mode, both moves commit simultaneously. If both reach 50+
-        # on the same commit, treat that as a tie (regardless of score).
-        if state.scores[Mark.O] >= 50 and state.scores[Mark.X] >= 50:
+        # In remote mode, both moves commit simultaneously. If both are 50+
+        # and equal on that commit, it's a tie; otherwise higher score wins.
+        if (
+            state.scores[Mark.O] >= 50
+            and state.scores[Mark.X] >= 50
+            and state.scores[Mark.O] == state.scores[Mark.X]
+        ):
             winner = "TIE"
-        elif state.scores[Mark.O] >= 50:
+        elif state.scores[Mark.O] >= state.scores[Mark.X]:
             winner = "O"
         else:
             winner = "X"

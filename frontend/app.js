@@ -88,8 +88,8 @@ const REMOTE_INSTRUCTIONS = [
   'Click on "Join" to join the game.',
 ];
 
-const WIN_VIDEO_URL = '/static/media/Win.mp4';
-const TIE_VIDEO_URL = '/static/media/Tie.mp4';
+const WIN_VIDEO_URL = '/static/media/Win!.mp4';
+const TIE_VIDEO_URL = '/static/media/Tie!.mp4';
 
 function updateJoinButtonState() {
   if (!joinBtn) return;
