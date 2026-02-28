@@ -52,6 +52,7 @@ let lobbyHostName = null;
 let localNextMark = 'O';
 let scoreFlashTimer = null;
 let isScoreFlashActive = false;
+let scoreFlashExpiresAt = 0;
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
 let suppressOpponentRevealAnimationOnce = false;
@@ -327,6 +328,7 @@ function showScoreFlash(mark, addedScore) {
   }
   isScoreFlashActive = true;
   setStatusHtml(`<span class="${cls}">${flashText}</span>`);
+  scoreFlashExpiresAt = Date.now() + 3000;
   if (scoreFlashTimer) {
     window.clearTimeout(scoreFlashTimer);
   }
@@ -659,11 +661,16 @@ function handleMessage(msg) {
       const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
       const youMoved = (myMark === 'O') ? !!pendingFlags.O : !!pendingFlags.X;
       const oppMoved = (myMark === 'O') ? !!pendingFlags.X : !!pendingFlags.O;
-      if (!youMoved && oppMoved) {
+    if (!youMoved && oppMoved) {
+      if (Date.now() >= scoreFlashExpiresAt) {
         setStatusMessage(`${oppName} has moved. Waiting for you!`);
         break;
       }
+      break;
+    }
+    if (Date.now() >= scoreFlashExpiresAt) {
       setStatusMessage(computeTurnMessage());
+    }
       break;
 
     case 'score_event':
@@ -675,7 +682,7 @@ function handleMessage(msg) {
     case 'turn_committed':
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
-      if (isScoreFlashActive) break;
+      if (isScoreFlashActive || Date.now() < scoreFlashExpiresAt) break;
       if (myMark && modeChosen === 'local') {
         setStatusMessage(computeTurnMessage());
       } else if (myMark) {
