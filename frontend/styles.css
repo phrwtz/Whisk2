@@ -179,6 +179,26 @@ input {
 .msg-player-o { color: var(--o-color); font-weight: 700; }
 .msg-player-x { color: var(--x-color); font-weight: 700; }
 
+.gameover-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gameover-text {
+  font-size: 26px;
+  font-weight: 900;
+  color: #c30000;
+}
+
+.gameover-video {
+  width: 160px;
+  height: auto;
+  border-radius: 10px;
+  border: 3px solid rgba(195, 0, 0, 0.35);
+  background: #000;
+}
+
 .board {
   display: grid;
   grid-template-columns: repeat(8, 1fr);

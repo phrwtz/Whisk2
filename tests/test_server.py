@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from backend.app.game import GameState, Mark, apply_move, commit_turn
 from backend.app.main import app, manager
 
 
@@ -349,6 +350,29 @@ def test_remote_score_event_sent_only_to_scoring_player():
 
 def test_remote_scoring_only_counts_lines_created_by_latest_own_move():
     manager.reset()
+
+
+def test_commit_turn_both_reach_50_plus_is_tie():
+    state = GameState()
+
+    # Turn 1: place two pieces each without scoring.
+    apply_move(state, Mark.O, 0, 0)
+    apply_move(state, Mark.X, 7, 7)
+    commit_turn(state)
+    apply_move(state, Mark.O, 0, 1)
+    apply_move(state, Mark.X, 7, 6)
+    commit_turn(state)
+
+    # Force near-win, then both score +1 on the same commit.
+    state.scores[Mark.O] = 49
+    state.scores[Mark.X] = 49
+
+    apply_move(state, Mark.O, 0, 2)  # completes O's 3-in-row
+    apply_move(state, Mark.X, 7, 5)  # completes X's 3-in-row
+    summary = commit_turn(state)
+
+    assert summary["done"] is True
+    assert summary["winner"] == "TIE"
     client = TestClient(app)
 
     with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:

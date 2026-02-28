@@ -10,3 +10,8 @@ __pycache__/
 # Node
 node_modules/
 
+# Local-only assets (kept out of git; use frontend/media for deployable files)
+/Win!.mp4
+/Tie.mp4
+/local instructions.txt
+/remote instructions.txt

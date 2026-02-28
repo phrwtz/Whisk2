@@ -88,10 +88,8 @@ const REMOTE_INSTRUCTIONS = [
   'Click on "Join" to join the game.',
 ];
 
-// NOTE: Replace these with your preferred GIF URLs if you want different art.
-// We keep them in one place so they're easy to swap.
-const WIN_GIF_URL = 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcW9hZ2M4a2J3eW40aGxraDBvM2c2b2tqcnp2aHVrZ2ZmdW1wZ3ZxYSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3o7aD2saalBwwftBIY/giphy.gif';
-const TIE_GIF_URL = 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaXlyb3d4YTRkYmE2d2dxZzR1ZHR4dXh1aG9lZTI2cGJ4YzRmbW5kZSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l0MYt5jPR6QX5pnqM/giphy.gif';
+const WIN_VIDEO_URL = '/static/media/Win.mp4';
+const TIE_VIDEO_URL = '/static/media/Tie.mp4';
 
 function updateJoinButtonState() {
   if (!joinBtn) return;
@@ -339,22 +337,14 @@ function showScoreFlash(mark, addedScore) {
   }, 2000);
 }
 
-function showCelebration(kind, message) {
-  if (!celebrationEl || !celebrationTextEl) return;
-  celebrationTextEl.textContent = message;
-  if (celebrationGifEl) {
-    celebrationGifEl.style.display = '';
-    celebrationGifEl.src = (kind === 'tie') ? TIE_GIF_URL : WIN_GIF_URL;
-    celebrationGifEl.onerror = () => {
-      // If the CDN link fails, still show the overlay + text.
-      celebrationGifEl.style.display = 'none';
-    };
-  }
-  celebrationEl.classList.remove('hidden');
-  playVictoryMotif();
-  window.setTimeout(() => {
-    celebrationEl.classList.add('hidden');
-  }, 4500);
+function showGameOverMedia(kind, text) {
+  const src = (kind === 'tie') ? TIE_VIDEO_URL : WIN_VIDEO_URL;
+  setStatusHtml(
+    `<div class="gameover-row">` +
+    `<div class="gameover-text">${escapeHtml(text)}</div>` +
+    `<video class="gameover-video" src="${src}" autoplay muted loop playsinline></video>` +
+    `</div>`
+  );
 }
 
 function pieceKey(p) {
@@ -692,11 +682,15 @@ function handleMessage(msg) {
 
     case 'game_over':
       isGameOver = true;
-      setStatusMessage(msg.message || 'Game over!');
-      if (msg.message && msg.message.includes('wins')) {
-        showCelebration('win', msg.message);
-      } else if (msg.message && msg.message.toLowerCase().includes('tie')) {
-        showCelebration('tie', msg.message);
+      // Show a big red banner + embedded MP4 in the Messages card.
+      if (msg.message && msg.message.toLowerCase().includes('tie')) {
+        showGameOverMedia('tie', "It's a tie!");
+      } else if (msg.message && msg.message.includes('O wins')) {
+        showGameOverMedia('win', `${playerName('O', 'Player 1')} wins!`);
+      } else if (msg.message && msg.message.includes('X wins')) {
+        showGameOverMedia('win', `${playerName('X', 'Player 2')} wins!`);
+      } else {
+        setStatusMessage(msg.message || 'Game over!');
       }
       render();
       break;
