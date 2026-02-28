@@ -33,6 +33,7 @@ const remoteBtn = document.getElementById('remoteBtn');
 
 const newGameBtn = document.getElementById('newGameBtn');
 const celebrationEl = document.getElementById('celebration');
+const celebrationGifEl = document.getElementById('celebrationGif');
 const celebrationTextEl = document.getElementById('celebrationText');
 
 const boardEl = document.getElementById('board');
@@ -86,6 +87,11 @@ const REMOTE_INSTRUCTIONS = [
   "You are now playing the game in remote mode, meaning that the players are on two different computers and cannot see each other's screen. Whisk takes advantage of this fact to eliminate the advantage that the first player often enjoys in a game of this kind and has the players move, in effect, simultaneously. The first player to make a move sees that move as expected but the second player's screen is not updated until they have made a move. If the second player clicks on the same square that the first player chose, that results in an error message and the player can try again.",
   'Click on "Join" to join the game.',
 ];
+
+// NOTE: Replace these with your preferred GIF URLs if you want different art.
+// We keep them in one place so they're easy to swap.
+const WIN_GIF_URL = 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcW9hZ2M4a2J3eW40aGxraDBvM2c2b2tqcnp2aHVrZ2ZmdW1wZ3ZxYSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3o7aD2saalBwwftBIY/giphy.gif';
+const TIE_GIF_URL = 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaXlyb3d4YTRkYmE2d2dxZzR1ZHR4dXh1aG9lZTI2cGJ4YzRmbW5kZSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l0MYt5jPR6QX5pnqM/giphy.gif';
 
 function updateJoinButtonState() {
   if (!joinBtn) return;
@@ -333,9 +339,17 @@ function showScoreFlash(mark, addedScore) {
   }, 2000);
 }
 
-function showCelebration(message) {
+function showCelebration(kind, message) {
   if (!celebrationEl || !celebrationTextEl) return;
   celebrationTextEl.textContent = message;
+  if (celebrationGifEl) {
+    celebrationGifEl.style.display = '';
+    celebrationGifEl.src = (kind === 'tie') ? TIE_GIF_URL : WIN_GIF_URL;
+    celebrationGifEl.onerror = () => {
+      // If the CDN link fails, still show the overlay + text.
+      celebrationGifEl.style.display = 'none';
+    };
+  }
   celebrationEl.classList.remove('hidden');
   playVictoryMotif();
   window.setTimeout(() => {
@@ -680,7 +694,9 @@ function handleMessage(msg) {
       isGameOver = true;
       setStatusMessage(msg.message || 'Game over!');
       if (msg.message && msg.message.includes('wins')) {
-        showCelebration(msg.message);
+        showCelebration('win', msg.message);
+      } else if (msg.message && msg.message.toLowerCase().includes('tie')) {
+        showCelebration('tie', msg.message);
       }
       render();
       break;
