@@ -334,7 +334,7 @@ function showScoreFlash(mark, addedScore) {
     isScoreFlashActive = false;
     setStatusMessage(computeTurnMessage());
     scoreFlashTimer = null;
-  }, 2000);
+  }, 3000);
 }
 
 function showGameOverMedia(kind, text) {
@@ -345,6 +345,10 @@ function showGameOverMedia(kind, text) {
     `<video class="gameover-video" src="${src}" autoplay muted loop playsinline></video>` +
     `</div>`
   );
+  window.setTimeout(() => {
+    if (!isGameOver) return;
+    setStatusMessage(computeTurnMessage());
+  }, 5000);
 }
 
 function pieceKey(p) {
