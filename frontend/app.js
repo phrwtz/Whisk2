@@ -53,6 +53,7 @@ let localNextMark = 'O';
 let scoreFlashTimer = null;
 let isScoreFlashActive = false;
 let scoreFlashExpiresAt = 0;
+let lastScoreFlashSignature = '';
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
 let suppressOpponentRevealAnimationOnce = false;
@@ -317,6 +318,12 @@ function rowLengthFromScore(addedScore) {
 
 function showScoreFlash(mark, addedScore) {
   if (addedScore <= 0) return;
+  const signature = `${mark}:${addedScore}`;
+  const now = Date.now();
+  if (isScoreFlashActive && signature === lastScoreFlashSignature && now < scoreFlashExpiresAt) {
+    return;
+  }
+
   const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
   let flashText = '';
   if (addedScore === 2) {
@@ -327,6 +334,7 @@ function showScoreFlash(mark, addedScore) {
     flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
   }
   isScoreFlashActive = true;
+  lastScoreFlashSignature = signature;
   setStatusHtml(`<span class="${cls}">${flashText}</span>`);
   scoreFlashExpiresAt = Date.now() + 3000;
   if (scoreFlashTimer) {
@@ -337,6 +345,27 @@ function showScoreFlash(mark, addedScore) {
     setStatusMessage(computeTurnMessage());
     scoreFlashTimer = null;
   }, 3000);
+}
+
+function maybeShowScoreFlashFromState(prevScores, nextScores) {
+  if (!myMark || !nextScores) return;
+
+  if (modeChosen === 'local') {
+    const addedO = (nextScores.O ?? 0) - (prevScores.O ?? 0);
+    const addedX = (nextScores.X ?? 0) - (prevScores.X ?? 0);
+    if (addedO > 0) {
+      showScoreFlash('O', addedO);
+    } else if (addedX > 0) {
+      showScoreFlash('X', addedX);
+    }
+    return;
+  }
+
+  const mine = myMark;
+  const addedMine = (nextScores[mine] ?? 0) - (prevScores[mine] ?? 0);
+  if (addedMine > 0) {
+    showScoreFlash(mine, addedMine);
+  }
 }
 
 function showGameOverMedia(kind, text) {
@@ -707,6 +736,8 @@ function handleMessage(msg) {
       break;
 
     case 'state': {
+      const prevScores = { ...scores };
+
       if (msg.players) {
         const prevO = lastKnownPlayers.O;
         const prevX = lastKnownPlayers.X;
@@ -731,6 +762,7 @@ function handleMessage(msg) {
 
       if (msg.scores) {
         scores = msg.scores;
+        maybeShowScoreFlashFromState(prevScores, scores);
       }
 
       if (msg.pending) {
