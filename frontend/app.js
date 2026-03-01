@@ -378,8 +378,8 @@ function showGameOverMedia(kind, text) {
   );
   window.setTimeout(() => {
     if (!isGameOver) return;
-    setStatusMessage(computeTurnMessage());
-  }, 5000);
+    setStatusMessage('Game over...');
+  }, 10000);
 }
 
 function pieceKey(p) {
