@@ -86,6 +86,52 @@ From the repo root:
 pytest -q
 ```
 
+### Frontend Bot Harness (Milestone 9)
+
+You can run a tiny UI regression harness for bot mode (headless Chromium via Playwright):
+
+```bash
+pip install playwright
+playwright install chromium
+python scripts/frontend_bot_harness.py --bot-seed 123 --port 8765
+```
+
+This verifies key UI transitions for bot play and confirms the **Bot Analysis** panel receives explanation entries after a move.
+
+### Release Gate (Milestone 10)
+
+Evaluate training artifacts against configurable readiness thresholds:
+
+```bash
+python scripts/run_release_gate.py \
+  --manifest artifacts/checkpoints/manifest.json \
+  --min-generations 3 \
+  --min-promotion-rate 0.40 \
+  --min-latest-vs-random 0.55 \
+  --min-best-vs-random 0.60 \
+  --min-latest-replay-size 100 \
+  --strict
+```
+
+This writes `artifacts/reports/release_gate.json` and exits non-zero in strict mode when any gate fails.
+
+### Bot Release Promotion (Milestone 11)
+
+Promote the latest gate-approved checkpoint to a stable runtime artifact used by live bot mode:
+
+```bash
+python scripts/run_promote_release.py \
+  --manifest artifacts/checkpoints/manifest.json \
+  --gate artifacts/reports/release_gate.json \
+  --out-dir artifacts/releases
+```
+
+This writes:
+- `artifacts/releases/whiskbot_latest.pkl`
+- `artifacts/releases/whiskbot_release.json`
+
+By default the server bot now loads `artifacts/releases/whiskbot_latest.pkl` unless `WHISK_BOT_CHECKPOINT` is set.
+
 ---
 
 ## How simultaneous turns work

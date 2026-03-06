@@ -31,6 +31,7 @@ from .game import (
     ready_to_commit,
     scores_for_client,
 )
+from .agents.human_adapter import HumanVsAgentSession
 
 # -------------------------------------------------------------------
 
@@ -50,17 +51,22 @@ class GameManager:
         self.state = GameState()
         self.game_over = False
         self.local_next_mark = Mark.O
+        if self.mode == "bot":
+            self.bot_session = HumanVsAgentSession(seed=self.bot_seed)
 
     def reset(self) -> None:
         self.state = GameState()
         self.players: Dict[Mark, PlayerConn] = {}
         self.ws_to_mark: Dict[str, Mark] = {}
         self.lobby_clients: Dict[str, WebSocket] = {}
-        self.mode: Optional[str] = None  # 'remote' or 'local'
+        self.mode: Optional[str] = None  # 'remote', 'local', or 'bot'
         self.game_over = False
         self.local_next_mark = Mark.O
         self.game_id = str(uuid.uuid4())
         self.reset_on_next_join = False
+        self.bot_name = "WhiskBot"
+        self.bot_seed = 0
+        self.bot_session: Optional[HumanVsAgentSession] = None
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -122,7 +128,11 @@ async def send_state(to_ws: WebSocket, viewer_mark: Optional[Mark] = None, refre
         "local_next_mark": manager.local_next_mark.value if manager.mode == "local" else None,
         "players": {
             "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
-            "X": manager.players[Mark.X].name if Mark.X in manager.players else None,
+            "X": (
+                manager.players[Mark.X].name
+                if Mark.X in manager.players
+                else (manager.bot_name if manager.mode == "bot" and Mark.O in manager.players else None)
+            ),
         },
         "game_over": manager.game_over,
         "refresh": refresh,
@@ -141,7 +151,11 @@ async def send_lobby(to_ws: WebSocket) -> None:
         "mode": manager.mode,
         "players": {
             "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
-            "X": manager.players[Mark.X].name if Mark.X in manager.players else None,
+            "X": (
+                manager.players[Mark.X].name
+                if Mark.X in manager.players
+                else (manager.bot_name if manager.mode == "bot" and Mark.O in manager.players else None)
+            ),
         },
     }))
 
@@ -170,6 +184,13 @@ def game_over_message(winner: Optional[str]) -> str:
     return "Game over. It's a tie!"
 
 
+def parse_bot_seed(raw: object, default: int = 0) -> int:
+    try:
+        return int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 # -------------------------------------------------------------------
 
 @app.websocket("/ws")
@@ -188,8 +209,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
             # --------------- JOIN ---------------
             if mtype == "join":
                 name = (msg.get("name") or "").strip() or "Player"
+                requested_bot_seed = parse_bot_seed(msg.get("bot_seed"), manager.bot_seed)
                 requested_mode = msg.get("mode")
-                if requested_mode not in ("remote", "local"):
+                if requested_mode not in ("remote", "local", "bot"):
                     requested_mode = None
 
                 manager.prune_disconnected()
@@ -198,6 +220,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await manager.send(ws, {
                         "type": "error",
                         "message": "A game is already in progress with two players.",
+                    })
+                    continue
+                if manager.mode == "bot" and Mark.O in manager.players:
+                    await manager.send(ws, {
+                        "type": "error",
+                        "message": "A bot game is already in progress.",
                     })
                     continue
 
@@ -209,8 +237,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                 # First player (O) may request a mode (or leave None)
                 if mark == Mark.O:
-                    if requested_mode in ("remote", "local"):
+                    if requested_mode in ("remote", "local", "bot"):
                         manager.mode = requested_mode
+                    if manager.mode == "bot":
+                        manager.bot_seed = requested_bot_seed
+                        manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
                 else:
                     # If current host is in local mode and joiner chooses local, hand off
                     # local ownership so the joiner can run their own local game.
@@ -235,8 +266,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         continue
                     # If second joiner selected a conflicting mode, fail fast with a clear message.
                     if (
-                        requested_mode in ("remote", "local")
-                        and manager.mode in ("remote", "local")
+                        requested_mode in ("remote", "local", "bot")
+                        and manager.mode in ("remote", "local", "bot")
                         and requested_mode != manager.mode
                     ):
                         await manager.send(ws, {
@@ -254,7 +285,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await broadcast_lobby()
 
                 if mark == Mark.O and manager.mode is None:
-                    await manager.send(ws, {"type": "need_mode", "message": "Choose Local or Remote."})
+                    await manager.send(ws, {"type": "need_mode", "message": "Choose Local, Remote, or Bot."})
 
             # --------------- LOBBY ---------------
             elif mtype == "lobby":
@@ -271,11 +302,14 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     continue
 
                 mode = msg.get("mode")
-                if mode not in ("remote", "local"):
-                    await manager.send(ws, {"type": "error", "message": "Mode must be local or remote."})
+                if mode not in ("remote", "local", "bot"):
+                    await manager.send(ws, {"type": "error", "message": "Mode must be local, remote, or bot."})
                     continue
 
                 manager.mode = mode
+                if mode == "bot":
+                    manager.bot_seed = parse_bot_seed(msg.get("bot_seed"), manager.bot_seed)
+                    manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
                 await manager.broadcast({"type": "mode", "mode": mode})
                 if mode == "local":
                     manager.local_next_mark = Mark.O
@@ -310,6 +344,56 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                     manager.local_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
                     await broadcast_state(refresh=True)
+                    added = summary.get("added", {})
+                    add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
+                    add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
+                    if add_o > 0 and Mark.O in manager.players:
+                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
+                    if add_x > 0 and Mark.O in manager.players:
+                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "X", "added": add_x})
+                    await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
+                    if summary["done"]:
+                        manager.game_over = True
+                        winner = summary.get("winner")
+                        winner_mark = winner if isinstance(winner, str) else None
+                        await manager.broadcast({
+                            "type": "game_over",
+                            "message": game_over_message(winner_mark),
+                        })
+                    continue
+
+                if manager.mode == "bot":
+                    if mark != Mark.O:
+                        await manager.send(ws, {"type": "error", "message": "Only Player 1 can move in bot mode."})
+                        continue
+
+                    try:
+                        apply_move(manager.state, Mark.O, row, col)
+                        if manager.bot_session is None:
+                            manager.bot_session = HumanVsAgentSession()
+                        bot_decision = manager.bot_session.choose_decision(manager.state, Mark.X)
+                        bot_row, bot_col = bot_decision.row, bot_decision.col
+                        apply_move(manager.state, Mark.X, bot_row, bot_col)
+                        summary = commit_turn(manager.state)
+                    except ValueError as e:
+                        await manager.send(ws, {"type": "invalid_move", "message": str(e)})
+                        continue
+
+                    await broadcast_state(refresh=True)
+                    if Mark.O in manager.players:
+                        await manager.send(
+                            manager.players[Mark.O].ws,
+                            {
+                                "type": "bot_explanation",
+                                "turn": manager.state.turn,
+                                "source": bot_decision.source,
+                                "chosen": {"row": bot_decision.row, "col": bot_decision.col},
+                                "candidates": [
+                                    {"row": c.row, "col": c.col, "score": c.score}
+                                    for c in bot_decision.candidates
+                                ],
+                            },
+                        )
                     added = summary.get("added", {})
                     add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
                     add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0

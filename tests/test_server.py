@@ -1,5 +1,10 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from backend.app.agents.deploy import promote_release_artifact
+from backend.app.agents.model import WhiskPolicyValueModel
 from backend.app.game import GameState, Mark, apply_move, commit_turn
 from backend.app.main import app, manager
 
@@ -36,6 +41,17 @@ def _recv_n(ws, n: int):
 
 def highlight_coords(state_msg):
     return {(h["row"], h["col"]) for h in state_msg.get("highlight", [])}
+
+
+def _recv_until_type(ws, expected_type: str, max_messages: int = 12):
+    """Read websocket messages until expected type appears; return all consumed."""
+    msgs = []
+    for _ in range(max_messages):
+        msg = ws.receive_json()
+        msgs.append(msg)
+        if msg.get("type") == expected_type:
+            return msgs
+    raise AssertionError(f"Did not receive {expected_type!r} within {max_messages} messages")
 
 
 def test_reject_moves_after_game_over():
@@ -323,24 +339,16 @@ def test_remote_score_event_sent_only_to_scoring_player():
             _recv_pending_flags(ws_o)
             _recv_pending_flags(ws_x)
             ws_x.send_json({"type": "move", "row": x_coord[0], "col": x_coord[1]})
+            msgs_o = _recv_until_type(ws_o, "turn_committed")
+            msgs_x = _recv_until_type(ws_x, "turn_committed")
+            return msgs_o, msgs_x
 
-        # Build O line at row 0 while X plays elsewhere.
+        # Build O line while X plays non-scoring filler moves.
         play_turn((0, 0), (7, 7))
-        _recv_type(ws_o, "state")
-        _recv_type(ws_x, "state")
-        _recv_type(ws_o, "turn_committed")
-        _recv_type(ws_x, "turn_committed")
-
-        play_turn((0, 1), (7, 6))
-        _recv_type(ws_o, "state")
-        _recv_type(ws_x, "state")
-        _recv_type(ws_o, "turn_committed")
-        _recv_type(ws_x, "turn_committed")
+        play_turn((0, 1), (6, 7))
 
         # Third O in row scores; only O should get score_event.
-        play_turn((0, 2), (7, 5))
-        o_msgs = _recv_n(ws_o, 3)  # state, score_event, turn_committed
-        x_msgs = _recv_n(ws_x, 2)  # state, turn_committed
+        o_msgs, x_msgs = play_turn((0, 2), (6, 6))
 
         assert any(m.get("type") == "score_event" and m.get("mark") == "O" and m.get("added", 0) > 0 for m in o_msgs)
         assert all(m.get("type") != "score_event" for m in x_msgs)
@@ -349,6 +357,50 @@ def test_remote_score_event_sent_only_to_scoring_player():
 
 
 def test_remote_scoring_only_counts_lines_created_by_latest_own_move():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Olive", "mode": "remote"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_x.send_json({"type": "join", "name": "Xavier"})
+        _recv_type(ws_x, "joined")
+        _recv_type(ws_x, "state")
+        _recv_type(ws_o, "state")
+
+        def play_turn(o_coord, x_coord):
+            ws_o.send_json({"type": "move", "row": o_coord[0], "col": o_coord[1]})
+            _recv_pending_flags(ws_o)
+            _recv_pending_flags(ws_x)
+            ws_x.send_json({"type": "move", "row": x_coord[0], "col": x_coord[1]})
+            s_o = _recv_state_where(ws_o, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
+            s_x = _recv_state_where(ws_x, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
+            _recv_type(ws_o, "turn_committed")
+            _recv_type(ws_x, "turn_committed")
+            return s_o, s_x
+
+        # No one scores yet.
+        s1_o, _ = play_turn((0, 0), (7, 7))
+        assert s1_o["scores"] == {"O": 0, "X": 0}
+
+        s2_o, _ = play_turn((0, 1), (7, 6))
+        assert s2_o["scores"] == {"O": 0, "X": 0}
+
+        # Both latest moves complete a 3-in-a-row, so both should score +1.
+        s3_o, _ = play_turn((0, 2), (7, 5))
+        assert s3_o["scores"] == {"O": 1, "X": 1}
+
+        # O does NOT keep scoring from the old 3-line; X scores +4 for new 4-line.
+        s4_o, _ = play_turn((2, 2), (7, 4))
+        assert s4_o["scores"]["O"] == 1
+        assert s4_o["scores"]["X"] == 5
+
+        # X move should not award O points, and O move should not award X points.
+        s5_o, _ = play_turn((2, 3), (6, 0))
+        assert s5_o["scores"] == {"O": 1, "X": 5}
+
     manager.reset()
 
 
@@ -394,50 +446,6 @@ def test_commit_turn_both_50_plus_but_unequal_not_tie():
 
     assert summary["done"] is True
     assert summary["winner"] == "X"
-    client = TestClient(app)
-
-    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
-        ws_o.send_json({"type": "join", "name": "Olive", "mode": "remote"})
-        _recv_type(ws_o, "joined")
-        _recv_type(ws_o, "state")
-
-        ws_x.send_json({"type": "join", "name": "Xavier"})
-        _recv_type(ws_x, "joined")
-        _recv_type(ws_x, "state")
-        _recv_type(ws_o, "state")
-
-        def play_turn(o_coord, x_coord):
-            ws_o.send_json({"type": "move", "row": o_coord[0], "col": o_coord[1]})
-            _recv_pending_flags(ws_o)
-            _recv_pending_flags(ws_x)
-            ws_x.send_json({"type": "move", "row": x_coord[0], "col": x_coord[1]})
-            s_o = _recv_state_where(ws_o, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
-            s_x = _recv_state_where(ws_x, lambda s: not s["pending"]["O"] and not s["pending"]["X"])
-            _recv_type(ws_o, "turn_committed")
-            _recv_type(ws_x, "turn_committed")
-            return s_o, s_x
-
-        # No one scores yet.
-        s1_o, _ = play_turn((0, 0), (7, 7))
-        assert s1_o["scores"] == {"O": 0, "X": 0}
-
-        s2_o, _ = play_turn((0, 1), (7, 6))
-        assert s2_o["scores"] == {"O": 0, "X": 0}
-
-        # Both latest moves complete a 3-in-a-row, so both should score +1.
-        s3_o, _ = play_turn((0, 2), (7, 5))
-        assert s3_o["scores"] == {"O": 1, "X": 1}
-
-        # O does NOT keep scoring from the old 3-line; X scores +4 for new 4-line.
-        s4_o, _ = play_turn((2, 2), (7, 4))
-        assert s4_o["scores"]["O"] == 1
-        assert s4_o["scores"]["X"] == 5
-
-        # X move should not award O points, and O move should not award X points.
-        s5_o, _ = play_turn((2, 3), (6, 0))
-        assert s5_o["scores"] == {"O": 1, "X": 5}
-
-    manager.reset()
 
 
 def test_second_player_cannot_join_when_first_player_selected_local_mode():
@@ -523,5 +531,133 @@ def test_second_player_can_start_new_local_session_when_first_is_local():
         ws_first.send_json({"type": "move", "row": 0, "col": 0})
         err = _recv_type(ws_first, "error")
         assert err["message"] == "You must join first."
+
+    manager.reset()
+
+def test_bot_mode_single_human_gets_bot_reply_on_each_move():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "bot"})
+        joined = _recv_type(ws_o, "joined")
+        assert joined["mark"] == "O"
+        init_state = _recv_type(ws_o, "state")
+        assert init_state["mode"] == "bot"
+        assert init_state["players"]["X"] == "WhiskBot"
+
+        ws_o.send_json({"type": "move", "row": 0, "col": 0})
+        committed = _recv_state_where(ws_o, lambda s: s["turn"] == 1)
+        _recv_type(ws_o, "turn_committed")
+
+        assert committed["pending"] == {"O": False, "X": False}
+        assert any(p["mark"] == "O" and p["row"] == 0 and p["col"] == 0 for p in committed["pieces"])
+        assert any(p["mark"] == "X" for p in committed["pieces"])
+
+    manager.reset()
+
+
+def test_second_player_cannot_join_active_bot_game():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "bot"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_x.send_json({"type": "join", "name": "Guest", "mode": "remote"})
+        err = _recv_type(ws_x, "error")
+        assert err["message"] == "A bot game is already in progress."
+
+    manager.reset()
+
+
+def test_bot_mode_sends_explanation_event():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "join", "name": "Human", "mode": "bot", "bot_seed": 42})
+        _recv_type(ws, "joined")
+        _recv_type(ws, "state")
+
+        ws.send_json({"type": "move", "row": 0, "col": 0})
+        msgs = _recv_until_type(ws, "turn_committed")
+        explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
+        assert explanation is not None
+        assert explanation["source"] in ("model_prior", "mcts", "greedy")
+        assert "chosen" in explanation and "row" in explanation["chosen"] and "col" in explanation["chosen"]
+        assert isinstance(explanation.get("candidates"), list)
+
+    manager.reset()
+
+
+def test_bot_mode_seed_is_deterministic_for_same_opening():
+    manager.reset()
+
+
+def test_bot_mode_loads_promoted_release_artifact_end_to_end(tmp_path: Path, monkeypatch):
+    # Build a promoted checkpoint artifact in a temp release directory.
+    source_ckpt = tmp_path / "checkpoints" / "generation_001.pkl"
+    WhiskPolicyValueModel().save(source_ckpt)
+
+    manifest = tmp_path / "checkpoints" / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {"generation": 0, "path": str(source_ckpt), "promoted": False, "metrics": {}},
+                {"generation": 1, "path": str(source_ckpt), "promoted": True, "metrics": {"replay_size": 64}},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate = tmp_path / "reports" / "release_gate.json"
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    gate.write_text(json.dumps({"passed": True}), encoding="utf-8")
+
+    promoted = promote_release_artifact(
+        manifest_path=manifest,
+        gate_path=gate,
+        out_dir=tmp_path / "releases",
+    )
+    promoted_ckpt = Path(promoted["checkpoint"])
+    assert promoted_ckpt.exists()
+
+    # Force bot mode to load from the promoted release artifact.
+    monkeypatch.setenv("WHISK_BOT_CHECKPOINT", str(promoted_ckpt))
+
+    manager.reset()
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "join", "name": "Human", "mode": "bot", "bot_seed": 7})
+        _recv_type(ws, "joined")
+        _recv_type(ws, "state")
+
+        # Human move should trigger immediate bot reply in bot mode.
+        ws.send_json({"type": "move", "row": 0, "col": 0})
+        msgs = _recv_until_type(ws, "turn_committed")
+        explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
+        assert explanation is not None
+        assert explanation["source"] == "model_prior"
+
+    manager.reset()
+    client = TestClient(app)
+
+    def first_bot_reply(seed: int):
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "join", "name": "Human", "mode": "bot", "bot_seed": seed})
+            _recv_type(ws, "joined")
+            _recv_type(ws, "state")
+            ws.send_json({"type": "move", "row": 0, "col": 0})
+            committed = _recv_state_where(ws, lambda s: s["turn"] == 1)
+            _recv_type(ws, "turn_committed")
+            bot_piece = next(p for p in committed["pieces"] if p["mark"] == "X")
+            return (bot_piece["row"], bot_piece["col"])
+
+    first = first_bot_reply(123)
+    manager.reset()
+    second = first_bot_reply(123)
+    assert first == second
 
     manager.reset()
