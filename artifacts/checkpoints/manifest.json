@@ -1,0 +1,51 @@
+[
+  {
+    "generation": 0,
+    "path": "artifacts/checkpoints/generation_000.pkl",
+    "promoted": true,
+    "metrics": {
+      "bootstrap": 1
+    }
+  },
+  {
+    "generation": 1,
+    "path": "artifacts/checkpoints/generation_001.pkl",
+    "promoted": true,
+    "metrics": {
+      "candidate_win_rate_vs_best": 0.5,
+      "candidate_wins": 1,
+      "best_wins": 1,
+      "ties": 0,
+      "candidate_win_rate_vs_random": 1.0,
+      "examples": 16,
+      "replay_size": 16
+    }
+  },
+  {
+    "generation": 2,
+    "path": "artifacts/checkpoints/generation_002.pkl",
+    "promoted": true,
+    "metrics": {
+      "candidate_win_rate_vs_best": 0.5,
+      "candidate_wins": 1,
+      "best_wins": 1,
+      "ties": 0,
+      "candidate_win_rate_vs_random": 1.0,
+      "examples": 16
+    }
+  },
+  {
+    "generation": 3,
+    "path": "artifacts/checkpoints/generation_003.pkl",
+    "promoted": true,
+    "metrics": {
+      "candidate_win_rate_vs_best": 0.5,
+      "candidate_wins": 1,
+      "best_wins": 1,
+      "ties": 0,
+      "candidate_win_rate_vs_random": 1.0,
+      "examples": 16,
+      "replay_size": 32
+    }
+  }
+]

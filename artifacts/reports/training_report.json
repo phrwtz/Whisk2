@@ -1,0 +1,39 @@
+{
+  "total_generations": 3,
+  "promoted_generations": [
+    1,
+    2,
+    3
+  ],
+  "promotion_rate": 1.0,
+  "best_candidate_vs_random": 1.0,
+  "latest_candidate_vs_random": 1.0,
+  "candidate_vs_random_delta": 0.0,
+  "latest_replay_size": 32,
+  "generations": [
+    {
+      "generation": 1,
+      "promoted": true,
+      "candidate_win_rate_vs_best": 0.5,
+      "candidate_win_rate_vs_random": 1.0,
+      "examples": 16,
+      "replay_size": 16
+    },
+    {
+      "generation": 2,
+      "promoted": true,
+      "candidate_win_rate_vs_best": 0.5,
+      "candidate_win_rate_vs_random": 1.0,
+      "examples": 16,
+      "replay_size": 16
+    },
+    {
+      "generation": 3,
+      "promoted": true,
+      "candidate_win_rate_vs_best": 0.5,
+      "candidate_win_rate_vs_random": 1.0,
+      "examples": 16,
+      "replay_size": 32
+    }
+  ]
+}

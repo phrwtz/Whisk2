@@ -1,0 +1,50 @@
+{
+  "manifest": "artifacts/checkpoints/manifest.json",
+  "config": {
+    "min_generations": 3,
+    "min_promotion_rate": 0.4,
+    "min_latest_vs_random": 0.55,
+    "min_best_vs_random": 0.6,
+    "min_latest_replay_size": 32
+  },
+  "passed": true,
+  "checks": [
+    {
+      "name": "min_generations",
+      "actual": 3,
+      "required": 3,
+      "passed": true
+    },
+    {
+      "name": "min_promotion_rate",
+      "actual": 1.0,
+      "required": 0.4,
+      "passed": true
+    },
+    {
+      "name": "min_latest_vs_random",
+      "actual": 1.0,
+      "required": 0.55,
+      "passed": true
+    },
+    {
+      "name": "min_best_vs_random",
+      "actual": 1.0,
+      "required": 0.6,
+      "passed": true
+    },
+    {
+      "name": "min_latest_replay_size",
+      "actual": 32,
+      "required": 32,
+      "passed": true
+    }
+  ],
+  "summary": {
+    "total_generations": 3,
+    "promotion_rate": 1.0,
+    "latest_candidate_vs_random": 1.0,
+    "best_candidate_vs_random": 1.0,
+    "latest_replay_size": 32
+  }
+}

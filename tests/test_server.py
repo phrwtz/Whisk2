@@ -534,16 +534,16 @@ def test_second_player_can_start_new_local_session_when_first_is_local():
 
     manager.reset()
 
-def test_bot_mode_single_human_gets_bot_reply_on_each_move():
+def test_human_vs_bot_mode_single_human_gets_bot_reply_on_each_move():
     manager.reset()
     client = TestClient(app)
 
     with client.websocket_connect("/ws") as ws_o:
-        ws_o.send_json({"type": "join", "name": "Human", "mode": "bot"})
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot"})
         joined = _recv_type(ws_o, "joined")
         assert joined["mark"] == "O"
         init_state = _recv_type(ws_o, "state")
-        assert init_state["mode"] == "bot"
+        assert init_state["mode"] == "human_vs_bot"
         assert init_state["players"]["X"] == "WhiskBot"
 
         ws_o.send_json({"type": "move", "row": 0, "col": 0})
@@ -557,18 +557,18 @@ def test_bot_mode_single_human_gets_bot_reply_on_each_move():
     manager.reset()
 
 
-def test_second_player_cannot_join_active_bot_game():
+def test_second_player_cannot_join_active_human_vs_bot_game():
     manager.reset()
     client = TestClient(app)
 
     with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
-        ws_o.send_json({"type": "join", "name": "Human", "mode": "bot"})
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot"})
         _recv_type(ws_o, "joined")
         _recv_type(ws_o, "state")
 
         ws_x.send_json({"type": "join", "name": "Guest", "mode": "remote"})
         err = _recv_type(ws_x, "error")
-        assert err["message"] == "A bot game is already in progress."
+        assert err["message"] == "A computer game is already in progress."
 
     manager.reset()
 
@@ -578,7 +578,7 @@ def test_bot_mode_sends_explanation_event():
     client = TestClient(app)
 
     with client.websocket_connect("/ws") as ws:
-        ws.send_json({"type": "join", "name": "Human", "mode": "bot", "bot_seed": 42})
+        ws.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot", "bot_seed": 42})
         _recv_type(ws, "joined")
         _recv_type(ws, "state")
 
@@ -594,6 +594,25 @@ def test_bot_mode_sends_explanation_event():
 
 
 def test_bot_mode_seed_is_deterministic_for_same_opening():
+    manager.reset()
+    client = TestClient(app)
+
+    def first_bot_reply(seed: int):
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot", "bot_seed": seed})
+            _recv_type(ws, "joined")
+            _recv_type(ws, "state")
+            ws.send_json({"type": "move", "row": 0, "col": 0})
+            committed = _recv_state_where(ws, lambda s: s["turn"] == 1)
+            _recv_type(ws, "turn_committed")
+            bot_piece = next(p for p in committed["pieces"] if p["mark"] == "X")
+            return (bot_piece["row"], bot_piece["col"])
+
+    first = first_bot_reply(123)
+    manager.reset()
+    second = first_bot_reply(123)
+    assert first == second
+
     manager.reset()
 
 
@@ -630,7 +649,7 @@ def test_bot_mode_loads_promoted_release_artifact_end_to_end(tmp_path: Path, mon
     manager.reset()
     client = TestClient(app)
     with client.websocket_connect("/ws") as ws:
-        ws.send_json({"type": "join", "name": "Human", "mode": "bot", "bot_seed": 7})
+        ws.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot", "bot_seed": 7})
         _recv_type(ws, "joined")
         _recv_type(ws, "state")
 
@@ -642,22 +661,25 @@ def test_bot_mode_loads_promoted_release_artifact_end_to_end(tmp_path: Path, mon
         assert explanation["source"] == "model_prior"
 
     manager.reset()
+
+
+def test_bot_vs_bot_mode_autoplays_and_rejects_human_moves():
+    manager.reset()
     client = TestClient(app)
 
-    def first_bot_reply(seed: int):
-        with client.websocket_connect("/ws") as ws:
-            ws.send_json({"type": "join", "name": "Human", "mode": "bot", "bot_seed": seed})
-            _recv_type(ws, "joined")
-            _recv_type(ws, "state")
-            ws.send_json({"type": "move", "row": 0, "col": 0})
-            committed = _recv_state_where(ws, lambda s: s["turn"] == 1)
-            _recv_type(ws, "turn_committed")
-            bot_piece = next(p for p in committed["pieces"] if p["mark"] == "X")
-            return (bot_piece["row"], bot_piece["col"])
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "join", "name": "Watcher", "mode": "bot_vs_bot", "bot_seed": 17})
+        joined = _recv_type(ws, "joined")
+        assert joined["mark"] == "O"
+        init_state = _recv_type(ws, "state")
+        assert init_state["mode"] == "bot_vs_bot"
 
-    first = first_bot_reply(123)
-    manager.reset()
-    second = first_bot_reply(123)
-    assert first == second
+        committed = _recv_state_where(ws, lambda s: s["turn"] >= 1, max_messages=64)
+        assert any(p["mark"] == "O" for p in committed["pieces"])
+        assert any(p["mark"] == "X" for p in committed["pieces"])
+
+        ws.send_json({"type": "move", "row": 0, "col": 0})
+        err = _recv_type(ws, "error", max_messages=16)
+        assert err["message"] == "Moves are disabled while watching computer self-play."
 
     manager.reset()

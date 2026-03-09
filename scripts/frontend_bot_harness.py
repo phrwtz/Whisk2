@@ -46,46 +46,26 @@ def run_harness(base_url: str, bot_seed: int) -> None:
         page = browser.new_page()
         page.goto(url, wait_until="networkidle")
 
+        # Scenario A: human_vs_bot (play against computer)
         page.fill("#nameInput", "HarnessUser")
-        page.click("#botBtn")
+        page.click("#humanVsBotBtn")
         assert page.locator("#joinBtn").is_enabled(), "Join button should be enabled after name+mode"
-
         page.click("#joinBtn")
 
-        # Transition 1: joined message
         page.wait_for_function(
             "document.querySelector('#messages') && document.querySelector('#messages').innerText.includes('Joined. Waiting for game state')",
             timeout=10_000,
         )
-
-        # Transition 2: bot mode prompt
         page.wait_for_function(
             "document.querySelector('#messages') && document.querySelector('#messages').innerText.includes('your move against WhiskBot')",
             timeout=10_000,
         )
 
-        # Make one move; server should commit human + bot move.
         page.click(".cell[data-row='0'][data-col='0']")
-
-        # Transition 3: post-commit text (transient variants allowed)
         page.wait_for_function(
-            """
-            (() => {
-              const txt = document.querySelector('#messages')?.innerText || '';
-              return txt.includes('your move against WhiskBot')
-                || txt.includes('Waiting for you to make your next move');
-            })()
-            """,
+            "document.querySelector('#analysisPanel') && document.querySelector('#analysisPanel').innerText.includes('WhiskBot')",
             timeout=10_000,
         )
-
-        # Analysis panel should include a bot explanation entry.
-        page.wait_for_function(
-            "document.querySelector('#analysisPanel') && document.querySelector('#analysisPanel').innerText.includes('WhiskBot played')",
-            timeout=10_000,
-        )
-
-        # Board should now contain at least one O and one X after first committed turn.
         page.wait_for_function(
             """
             (() => {
@@ -97,6 +77,25 @@ def run_harness(base_url: str, bot_seed: int) -> None:
                 if (c.textContent === 'X') hasX = true;
               }
               return hasO && hasX;
+            })()
+            """,
+            timeout=10_000,
+        )
+
+        # Scenario B: bot_vs_bot (watch computer self-play)
+        page.click("#newGameBtn")
+        page.wait_for_timeout(250)
+        page.click("#botVsBotBtn")
+        page.wait_for_timeout(100)
+        page.wait_for_function(
+            "document.querySelector('#messages') && document.querySelector('#messages').innerText.toLowerCase().includes('playing against itself')",
+            timeout=10_000,
+        )
+        page.wait_for_function(
+            """
+            (() => {
+              const cells = [...document.querySelectorAll('.cell')];
+              return cells.some((c) => c.textContent === 'O') && cells.some((c) => c.textContent === 'X');
             })()
             """,
             timeout=10_000,

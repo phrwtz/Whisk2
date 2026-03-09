@@ -86,9 +86,9 @@ From the repo root:
 pytest -q
 ```
 
-### Frontend Bot Harness (Milestone 9)
+### Frontend Bot Harness (Milestone 9+)
 
-You can run a tiny UI regression harness for bot mode (headless Chromium via Playwright):
+You can run a tiny UI regression harness for computer modes (headless Chromium via Playwright):
 
 ```bash
 pip install playwright
@@ -96,7 +96,11 @@ playwright install chromium
 python scripts/frontend_bot_harness.py --bot-seed 123 --port 8765
 ```
 
-This verifies key UI transitions for bot play and confirms the **Bot Analysis** panel receives explanation entries after a move.
+This verifies key UI transitions for:
+- **Play Against Computer** (`human_vs_bot`)
+- **Watch Computer Self-Play** (`bot_vs_bot`)
+
+and confirms the **Bot Analysis** panel receives explanation entries.
 
 ### Release Gate (Milestone 10)
 
@@ -146,10 +150,13 @@ Turn lifecycle is: `reserve -> wait -> commit -> reveal`.
 
 ---
 
-## Local mode note
+## Modes
 
-The host can choose **Local** or **Remote** in the UI.  
-In the current version, Local mode is intentionally deferred and uses the same two-player server flow as Remote mode.
+The host can choose:
+- **Local (one computer)**
+- **Remote (two computers)**
+- **Play Against Computer** (human is always O)
+- **Watch Computer Self-Play** (bot-vs-bot spectator mode)
 
 ---
 
