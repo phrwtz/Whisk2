@@ -674,7 +674,11 @@ def test_bot_vs_bot_mode_autoplays_and_rejects_human_moves():
         init_state = _recv_type(ws, "state")
         assert init_state["mode"] == "bot_vs_bot"
 
-        committed = _recv_state_where(ws, lambda s: s["turn"] >= 1, max_messages=64)
+        committed = _recv_state_where(
+            ws,
+            lambda s: any(p["mark"] == "O" for p in s["pieces"]) and any(p["mark"] == "X" for p in s["pieces"]),
+            max_messages=64,
+        )
         assert any(p["mark"] == "O" for p in committed["pieces"])
         assert any(p["mark"] == "X" for p in committed["pieces"])
 

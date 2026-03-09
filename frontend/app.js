@@ -19,6 +19,7 @@ const gameEl = document.getElementById('game');
 
 const nameInput = document.getElementById('nameInput');
 const joinBtn = document.getElementById('joinBtn');
+const setupActionsEl = document.getElementById('setupActions');
 const instructionsBtnSetup = document.getElementById('instructionsBtnSetup');
 const instructionsBtnGame = document.getElementById('instructionsBtnGame');
 const instructionsModalEl = document.getElementById('instructionsModal');
@@ -61,6 +62,8 @@ let lastScoreFlashSignature = '';
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
 let suppressOpponentRevealAnimationOnce = false;
+let selfPlayWins = { O: 0, X: 0 };
+let selfPlayRestartQueued = false;
 const botSeedParam = new URLSearchParams(window.location.search).get('bot_seed');
 const botSeed = botSeedParam !== null && botSeedParam !== '' ? Number(botSeedParam) : null;
 let botAnalysisHistory = [];
@@ -124,7 +127,11 @@ function updateJoinButtonState() {
   if (!joinBtn) return;
   const hasName = !!nameInput?.value.trim();
   const hasMode = !!selectedJoinMode || !!lobbyMode;
-  joinBtn.disabled = !(hasName && hasMode);
+  const mode = selectedJoinMode || lobbyMode;
+  const needsName = mode !== MODE_BOT_VS_BOT;
+  joinBtn.disabled = !(hasMode && (hasName || !needsName));
+  const hideSetupActions = !myMark && mode === MODE_BOT_VS_BOT;
+  if (setupActionsEl) setupActionsEl.classList.toggle('hidden', hideSetupActions);
   updateInstructionsButtonState();
 }
 
@@ -134,13 +141,14 @@ function instructionsMode() {
 }
 
 function updateInstructionsButtonState() {
-  const preJoinActive = !myMark && !joinBtn.disabled && !!instructionsMode();
+  const activeMode = instructionsMode();
+  const preJoinActive = !myMark && !joinBtn.disabled && !!activeMode && activeMode !== MODE_BOT_VS_BOT;
   if (instructionsBtnSetup) {
     instructionsBtnSetup.classList.toggle('hidden', !preJoinActive);
     instructionsBtnSetup.disabled = !preJoinActive;
   }
 
-  const inGameActive = !!(myMark && modeChosen);
+  const inGameActive = !!(myMark && modeChosen && modeChosen !== MODE_BOT_VS_BOT);
   if (instructionsBtnGame) {
     instructionsBtnGame.classList.toggle('hidden', !inGameActive);
     instructionsBtnGame.disabled = !inGameActive;
@@ -157,7 +165,10 @@ function showSetup() {
 function showGame() {
   setupEl.classList.add('hidden');
   gameEl.classList.remove('hidden');
-  if (newGameBtn) newGameBtn.classList.remove('hidden');
+  if (newGameBtn) {
+    const hideNewGame = modeChosen === MODE_BOT_VS_BOT;
+    newGameBtn.classList.toggle('hidden', hideNewGame);
+  }
   updateInstructionsButtonState();
 }
 
@@ -250,10 +261,22 @@ function updateModePanels() {
   const hideScores = !modeChosen;
   if (scoresCard) scoresCard.classList.toggle('hidden', hideScores);
   if (messagesCard) messagesCard.classList.remove('hidden');
-  if (analysisCard) {
-    const showAnalysis = modeChosen === MODE_HUMAN_VS_BOT;
-    analysisCard.classList.toggle('hidden', !showAnalysis);
-  }
+  if (analysisCard) analysisCard.classList.add('hidden');
+}
+
+function selfPlayRecordText() {
+  return `Self-play record: O wins ${selfPlayWins.O}, X wins ${selfPlayWins.X}`;
+}
+
+function queueSelfPlayRestart() {
+  if (selfPlayRestartQueued) return;
+  selfPlayRestartQueued = true;
+  window.setTimeout(() => {
+    selfPlayRestartQueued = false;
+    if (myMark && modeChosen === MODE_BOT_VS_BOT) {
+      send({ type: 'new_game' });
+    }
+  }, 200);
 }
 
 function computeTurnMessage() {
@@ -266,7 +289,7 @@ function computeTurnMessage() {
     return "It's your move against WhiskBot.";
   }
   if (modeChosen === MODE_BOT_VS_BOT) {
-    return 'WhiskBot is playing against itself.';
+    return `WhiskBot is playing against itself. ${selfPlayRecordText()}`;
   }
 
   const oName = playerName('O', 'first player');
@@ -412,14 +435,23 @@ function maybeShowScoreFlashFromState(prevScores, nextScores) {
   }
 }
 
-function showGameOverMedia(kind, text) {
+function showGameOverMedia(kind, text, options = {}) {
+  const loop = options.loop !== false;
   const src = (kind === 'tie') ? TIE_VIDEO_URL : WIN_VIDEO_URL;
   setStatusHtml(
     `<div class="gameover-row">` +
     `<div class="gameover-text">${escapeHtml(text)}</div>` +
-    `<video class="gameover-video" src="${src}" autoplay muted loop playsinline></video>` +
+    `<video class="gameover-video" src="${src}" autoplay muted ${loop ? 'loop' : ''} playsinline></video>` +
     `</div>`
   );
+  if (typeof options.onEnded === 'function') {
+    const video = messagesEl?.querySelector('.gameover-video');
+    if (video) {
+      video.addEventListener('ended', options.onEnded, { once: true });
+    } else {
+      window.setTimeout(options.onEnded, 9000);
+    }
+  }
   window.setTimeout(() => {
     if (!isGameOver) return;
     setStatusMessage('Game over...');
@@ -635,6 +667,9 @@ function setMode(mode) {
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === MODE_REMOTE);
     if (humanVsBotBtn) humanVsBotBtn.classList.toggle('mode-btn-selected', mode === MODE_HUMAN_VS_BOT);
     if (botVsBotBtn) botVsBotBtn.classList.toggle('mode-btn-selected', mode === MODE_BOT_VS_BOT);
+    if (mode === MODE_BOT_VS_BOT) {
+      join(MODE_BOT_VS_BOT);
+    }
     return;
   }
 
@@ -741,6 +776,9 @@ function handleMessage(msg) {
       showGame();
       updateModePanels();
       updateInstructionsButtonState();
+      if (modeChosen !== MODE_BOT_VS_BOT) {
+        selfPlayRestartQueued = false;
+      }
       if (modeChosen === MODE_HUMAN_VS_BOT || modeChosen === MODE_BOT_VS_BOT) {
         resetBotAnalysisPanel();
       }
@@ -840,6 +878,17 @@ function handleMessage(msg) {
 
     case 'game_over':
       isGameOver = true;
+      if (modeChosen === MODE_BOT_VS_BOT) {
+        const winner = (msg.winner === 'O' || msg.winner === 'X') ? msg.winner : null;
+        if (winner) selfPlayWins[winner] += 1;
+        showGameOverMedia(
+          'win',
+          `Self-play game complete. ${selfPlayRecordText()}`,
+          { loop: false, onEnded: queueSelfPlayRestart }
+        );
+        render();
+        break;
+      }
       // Show a big red banner + embedded MP4 in the Messages card.
       if (msg.message && msg.message.toLowerCase().includes('tie')) {
         showGameOverMedia('tie', "It's a tie!");
@@ -894,6 +943,9 @@ function handleMessage(msg) {
         modeChosen = msg.mode === 'bot' ? MODE_HUMAN_VS_BOT : msg.mode;
         updateModePanels();
         updateInstructionsButtonState();
+        if (modeChosen !== MODE_BOT_VS_BOT) {
+          selfPlayRestartQueued = false;
+        }
         if (modeChosen !== MODE_HUMAN_VS_BOT && modeChosen !== MODE_BOT_VS_BOT) {
           resetBotAnalysisPanel();
         }
@@ -960,7 +1012,7 @@ function handleMessage(msg) {
 
 // Wire up UI
 joinBtn.addEventListener('click', () => {
-  if (joinBtn.disabled || !(selectedJoinMode || lobbyMode) || !nameInput.value.trim()) return;
+  if (joinBtn.disabled || !(selectedJoinMode || lobbyMode)) return;
   join(selectedJoinMode || lobbyMode);
 });
 nameInput.addEventListener('input', updateJoinButtonState);

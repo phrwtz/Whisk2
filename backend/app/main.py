@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,7 @@ class GameManager:
         self.state = GameState()
         self.game_over = False
         self.local_next_mark = Mark.O
+        self.bot_next_mark = Mark.O
         if self.mode in (MODE_HUMAN_VS_BOT, MODE_BOT_VS_BOT):
             self.bot_session = HumanVsAgentSession(seed=self.bot_seed)
 
@@ -81,7 +83,7 @@ class GameManager:
         self.bot_seed = 0
         self.bot_session: Optional[HumanVsAgentSession] = None
         self.bot_task: Optional[asyncio.Task] = None
-        self.bot_turn_delay_ms = 600
+        self.bot_next_mark = Mark.O
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -214,17 +216,6 @@ def parse_bot_seed(raw: object, default: int = 0) -> int:
         return default
 
 
-def parse_bot_tick_ms(default: int = 600) -> int:
-    import os
-
-    raw = os.getenv("WHISK_BVB_TICK_MS")
-    try:
-        value = int(raw) if raw is not None else default
-    except (TypeError, ValueError):
-        value = default
-    return max(20, value)
-
-
 def normalize_mode(raw: object) -> Optional[str]:
     if not isinstance(raw, str):
         return None
@@ -267,14 +258,13 @@ async def maybe_start_bot_vs_bot_loop() -> None:
 
     if manager.bot_session is None:
         manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
-    manager.bot_turn_delay_ms = parse_bot_tick_ms()
     game_id = manager.game_id
     manager.bot_task = asyncio.create_task(run_bot_vs_bot_loop(game_id))
 
 
 async def run_bot_vs_bot_loop(game_id: str) -> None:
     while True:
-        await asyncio.sleep(manager.bot_turn_delay_ms / 1000.0)
+        await asyncio.sleep(random.uniform(0.5, 2.0))
 
         if game_id != manager.game_id:
             return
@@ -288,11 +278,10 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
         try:
             if manager.bot_session is None:
                 manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
-            o_decision = manager.bot_session.choose_decision(manager.state, Mark.O)
-            apply_move(manager.state, Mark.O, o_decision.row, o_decision.col)
-            x_decision = manager.bot_session.choose_decision(manager.state, Mark.X)
-            apply_move(manager.state, Mark.X, x_decision.row, x_decision.col)
-            summary = commit_turn(manager.state)
+            moving_mark = manager.bot_next_mark
+            decision = manager.bot_session.choose_decision(manager.state, moving_mark)
+            apply_move(manager.state, moving_mark, decision.row, decision.col)
+            summary = commit_single_move(manager.state, moving_mark)
         except ValueError:
             # If one chosen move became illegal due to a race, retry next tick.
             continue
@@ -301,13 +290,14 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
 
         await broadcast_state(refresh=True)
         added = summary.get("added", {})
-        add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
-        add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
-        if add_o > 0 and Mark.O in manager.players:
-            await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
-        if add_x > 0 and Mark.O in manager.players:
-            await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "X", "added": add_x})
+        add_for_mark = int(added.get(moving_mark.value, 0)) if isinstance(added, dict) else 0
+        if add_for_mark > 0 and Mark.O in manager.players:
+            await manager.send(
+                manager.players[Mark.O].ws,
+                {"type": "score_event", "mark": moving_mark.value, "added": add_for_mark},
+            )
         await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
+        manager.bot_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
 
         if summary["done"]:
             manager.game_over = True
@@ -315,7 +305,8 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
             winner_mark = winner if isinstance(winner, str) else None
             await manager.broadcast({
                 "type": "game_over",
-                "message": game_over_message(winner_mark),
+                "message": game_over_message("TIE"),
+                "winner": winner_mark,
             })
             return
 
@@ -505,6 +496,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         await manager.broadcast({
                             "type": "game_over",
                             "message": game_over_message(winner_mark),
+                            "winner": winner_mark,
                         })
                     continue
 
@@ -542,6 +534,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         await manager.broadcast({
                             "type": "game_over",
                             "message": game_over_message(winner_mark),
+                            "winner": winner_mark,
                         })
                     continue
 
@@ -592,6 +585,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         await manager.broadcast({
                             "type": "game_over",
                             "message": game_over_message(winner_mark),
+                            "winner": winner_mark,
                         })
 
             # --------------- NEW GAME ---------------
