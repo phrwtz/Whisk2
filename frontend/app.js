@@ -43,6 +43,7 @@ const boardEl = document.getElementById('board');
 const boardCard = document.getElementById('boardCard');
 const scoresEl = document.getElementById('scores');
 const scoresCard = document.getElementById('scoresCard');
+const cancelMachineLearningBtn = document.getElementById('cancelMachineLearningBtn');
 const messagesCard = document.getElementById('messagesCard');
 const messagesEl = document.getElementById('messages');
 const setupNoticeEl = document.getElementById('setupNotice');
@@ -277,6 +278,9 @@ function updateModePanels() {
   if (scoresCard) scoresCard.classList.toggle('hidden', hideScores);
   if (messagesCard) messagesCard.classList.remove('hidden');
   if (boardCard) boardCard.classList.toggle('hidden', modeChosen === MODE_BOT_VS_BOT);
+  if (cancelMachineLearningBtn) {
+    cancelMachineLearningBtn.classList.toggle('hidden', !(myMark && modeChosen === MODE_BOT_VS_BOT));
+  }
   if (analysisCard) analysisCard.classList.add('hidden');
 }
 
@@ -296,12 +300,48 @@ function selfPlaySummaryText() {
     ? (selfPlayStats.totalElapsedMs / selfPlayStats.gamesPlayed)
     : 0;
   return [
+    `O: ${scores?.O ?? 0}`,
+    `X: ${scores?.X ?? 0}`,
+    '',
     `Games played: ${selfPlayStats.gamesPlayed}`,
     `Won by O: ${selfPlayStats.winsO}`,
     `Won by X: ${selfPlayStats.winsX}`,
     `Tied: ${selfPlayStats.ties}`,
     `Average elapsed time per game: ${avgMs.toFixed(1)} ms`,
   ].join('\n');
+}
+
+function resetModeButtons() {
+  if (localBtn) localBtn.classList.remove('mode-btn-selected');
+  if (remoteBtn) remoteBtn.classList.remove('mode-btn-selected');
+  if (humanVsBotBtn) humanVsBotBtn.classList.remove('mode-btn-selected');
+  if (botVsBotBtn) botVsBotBtn.classList.remove('mode-btn-selected');
+}
+
+function leaveToLanding() {
+  myMark = null;
+  modeChosen = null;
+  selectedJoinMode = null;
+  lobbyMode = null;
+  lobbyHostName = null;
+  localNextMark = 'O';
+  isGameOver = false;
+  players = { O: null, X: null };
+  lastKnownPlayers = { O: null, X: null };
+  pendingFlags = { O: false, X: false };
+  scores = { O: 0, X: 0 };
+  serverPieces = [];
+  highlightedCells = new Set();
+  visiblePieceKeys = new Set();
+  selfPlayRestartQueued = false;
+  suppressOpponentRevealAnimationOnce = false;
+  resetSelfPlayStats();
+  resetModeButtons();
+  updateModePanels();
+  updateJoinButtonState();
+  showSetup();
+  setStatusMessage('Enter your name, choose a mode, then click Join.');
+  send({ type: 'lobby' });
 }
 
 function queueSelfPlayRestart() {
@@ -428,13 +468,19 @@ function showScoreFlash(mark, addedScore) {
   }
 
   const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
-  let flashText = '';
-  if (addedScore === 2) {
-    flashText = 'You got 3 in a row two different ways! You scored 2 points!';
-  } else {
+  let flashText;
+  if (modeChosen === MODE_BOT_VS_BOT) {
     const rowLen = rowLengthFromScore(addedScore);
     const pointWord = addedScore === 1 ? 'point' : 'points';
-    flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
+    flashText = `${mark} gets ${rowLen} in a row and scores ${addedScore} ${pointWord}!`;
+  } else {
+    if (addedScore === 2) {
+      flashText = 'You got 3 in a row two different ways! You scored 2 points!';
+    } else {
+      const rowLen = rowLengthFromScore(addedScore);
+      const pointWord = addedScore === 1 ? 'point' : 'points';
+      flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
+    }
   }
   isScoreFlashActive = true;
   lastScoreFlashSignature = signature;
@@ -887,6 +933,10 @@ function handleMessage(msg) {
       }
       break;
 
+    case 'left':
+      leaveToLanding();
+      break;
+
     case 'bot_explanation':
       if (modeChosen === MODE_HUMAN_VS_BOT && Date.now() >= scoreFlashExpiresAt) {
         const text = formatBotExplanation(msg);
@@ -1082,6 +1132,13 @@ if (newGameBtn) {
   newGameBtn.addEventListener('click', () => {
     if (!myMark) return;
     send({ type: 'new_game' });
+  });
+}
+if (cancelMachineLearningBtn) {
+  cancelMachineLearningBtn.addEventListener('click', () => {
+    if (modeChosen !== MODE_BOT_VS_BOT) return;
+    send({ type: 'leave' });
+    leaveToLanding();
   });
 }
 

@@ -318,6 +318,14 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
             return
 
         await broadcast_state(refresh=True)
+        added = summary.get("added", {})
+        add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
+        add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
+        if Mark.O in manager.players:
+            if add_o > 0:
+                await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
+            if add_x > 0:
+                await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "X", "added": add_x})
         await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
 
         if summary["done"]:
@@ -630,6 +638,40 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await broadcast_state()
                 if manager.mode == MODE_BOT_VS_BOT:
                     await maybe_start_bot_vs_bot_loop()
+
+            # --------------- LEAVE ---------------
+            elif mtype == "leave":
+                mark = manager.ws_to_mark.pop(ws_id, None)
+                manager.lobby_clients[ws_id] = ws
+                if mark is None or mark not in manager.players:
+                    await manager.send(ws, {"type": "left"})
+                    await send_lobby(ws)
+                    continue
+
+                if manager.bot_task is not None and not manager.bot_task.done():
+                    manager.bot_task.cancel()
+                    manager.bot_task = None
+
+                del manager.players[mark]
+                manager.state.pending[mark] = None
+
+                await manager.send(ws, {"type": "left"})
+
+                if manager.players:
+                    await broadcast_state()
+                    await broadcast_lobby()
+                    manager.reset_on_next_join = True
+                else:
+                    manager.state = GameState()
+                    manager.mode = None
+                    manager.game_over = False
+                    manager.local_next_mark = Mark.O
+                    manager.bot_session = None
+                    manager.bot_seed = 0
+                    manager.game_id = str(uuid.uuid4())
+                    manager.reset_on_next_join = False
+                    await broadcast_lobby()
+                    await send_lobby(ws)
 
             else:
                 await manager.send(ws, {"type": "error", "message": f"Unknown message type: {mtype}"})
