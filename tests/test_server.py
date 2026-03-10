@@ -684,6 +684,6 @@ def test_bot_vs_bot_mode_autoplays_and_rejects_human_moves():
 
         ws.send_json({"type": "move", "row": 0, "col": 0})
         err = _recv_type(ws, "error", max_messages=16)
-        assert err["message"] == "Moves are disabled while watching computer self-play."
+        assert err["message"] == "Moves are disabled while Machine Learning mode is running."
 
     manager.reset()

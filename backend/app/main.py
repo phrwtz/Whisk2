@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -63,7 +63,6 @@ class GameManager:
         self.state = GameState()
         self.game_over = False
         self.local_next_mark = Mark.O
-        self.bot_next_mark = Mark.O
         if self.mode in (MODE_HUMAN_VS_BOT, MODE_BOT_VS_BOT):
             self.bot_session = HumanVsAgentSession(seed=self.bot_seed)
 
@@ -83,7 +82,6 @@ class GameManager:
         self.bot_seed = 0
         self.bot_session: Optional[HumanVsAgentSession] = None
         self.bot_task: Optional[asyncio.Task] = None
-        self.bot_next_mark = Mark.O
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -264,7 +262,8 @@ async def maybe_start_bot_vs_bot_loop() -> None:
 
 async def run_bot_vs_bot_loop(game_id: str) -> None:
     while True:
-        await asyncio.sleep(random.uniform(0.5, 2.0))
+        # Yield to the event loop while still running at machine speed.
+        await asyncio.sleep(0)
 
         if game_id != manager.game_id:
             return
@@ -278,26 +277,48 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
         try:
             if manager.bot_session is None:
                 manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
-            moving_mark = manager.bot_next_mark
-            decision = manager.bot_session.choose_decision(manager.state, moving_mark)
-            apply_move(manager.state, moving_mark, decision.row, decision.col)
-            summary = commit_single_move(manager.state, moving_mark)
-        except ValueError:
-            # If one chosen move became illegal due to a race, retry next tick.
-            continue
+            # Both bots choose from the same pre-turn state.
+            base_state = deepcopy(manager.state)
+            o_decision = manager.bot_session.choose_decision(base_state, Mark.O)
+            x_decision = manager.bot_session.choose_decision(base_state, Mark.X)
+
+            apply_move(manager.state, Mark.O, o_decision.row, o_decision.col)
+            try:
+                apply_move(manager.state, Mark.X, x_decision.row, x_decision.col)
+            except ValueError:
+                # If both chose the same square, X retries after having made one move
+                # (matching remote-mode semantics where O is hidden until X moves).
+                retry_state = deepcopy(manager.state)
+                applied = False
+                for _ in range(6):
+                    x_retry = manager.bot_session.choose_decision(retry_state, Mark.X)
+                    try:
+                        apply_move(manager.state, Mark.X, x_retry.row, x_retry.col)
+                        applied = True
+                        break
+                    except ValueError:
+                        continue
+                if not applied:
+                    occ = manager.state.board_occupancy()
+                    reserved = manager.state.reserved_squares()
+                    fallback = None
+                    for r in range(8):
+                        for c in range(8):
+                            if (r, c) not in occ and (r, c) not in reserved:
+                                fallback = (r, c)
+                                break
+                        if fallback is not None:
+                            break
+                    if fallback is None:
+                        continue
+                    apply_move(manager.state, Mark.X, fallback[0], fallback[1])
+
+            summary = commit_turn(manager.state)
         except asyncio.CancelledError:
             return
 
         await broadcast_state(refresh=True)
-        added = summary.get("added", {})
-        add_for_mark = int(added.get(moving_mark.value, 0)) if isinstance(added, dict) else 0
-        if add_for_mark > 0 and Mark.O in manager.players:
-            await manager.send(
-                manager.players[Mark.O].ws,
-                {"type": "score_event", "mark": moving_mark.value, "added": add_for_mark},
-            )
         await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
-        manager.bot_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
 
         if summary["done"]:
             manager.game_over = True
@@ -305,7 +326,7 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
             winner_mark = winner if isinstance(winner, str) else None
             await manager.broadcast({
                 "type": "game_over",
-                "message": game_over_message("TIE"),
+                "message": game_over_message(winner_mark),
                 "winner": winner_mark,
             })
             return
@@ -409,7 +430,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         ws,
                         {
                             "type": "need_mode",
-                            "message": "Choose Local, Remote, Play Against Computer, or Watch Computer Self-Play.",
+                            "message": "Choose Local, Remote, Play Against Computer, or Machine Learning.",
                         },
                     )
 
@@ -543,7 +564,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         ws,
                         {
                             "type": "error",
-                            "message": "Moves are disabled while watching computer self-play.",
+                            "message": "Moves are disabled while Machine Learning mode is running.",
                         },
                     )
                     continue
