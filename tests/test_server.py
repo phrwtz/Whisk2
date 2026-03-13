@@ -557,6 +557,21 @@ def test_human_vs_bot_mode_single_human_gets_bot_reply_on_each_move():
     manager.reset()
 
 
+def test_human_vs_bot_bot_can_move_first_after_delay():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot", "bot_seed": 123})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        pending = _recv_pending_flags(ws_o, max_messages=4)
+        assert pending["pending"] == {"O": False, "X": True}
+
+    manager.reset()
+
+
 def test_second_player_cannot_join_active_human_vs_bot_game():
     manager.reset()
     client = TestClient(app)

@@ -66,14 +66,21 @@ class GameManager:
 
     def reset_game_state_only(self) -> None:
         """Clear board/scores/turn/pending but keep players + mode."""
+        self.cancel_bot_move_task()
+        self.bot_pending_decision = None
+        self.bot_turn_nonce += 1
         self.state = GameState()
         self.game_over = False
         self.local_next_mark = Mark.O
         if self.mode == MODE_HUMAN_VS_BOT:
             self.bot_seed = advance_bot_seed(self.bot_seed)
             self.bot_session = HumanVsAgentSession(seed=self.bot_seed)
+        else:
+            self.bot_session = None
 
     def reset(self) -> None:
+        if hasattr(self, "bot_move_task"):
+            self.cancel_bot_move_task()
         self.state = GameState()
         self.players: Dict[Mark, PlayerConn] = {}
         self.ws_to_mark: Dict[str, Mark] = {}
@@ -86,6 +93,9 @@ class GameManager:
         self.bot_name = "WhiskBot"
         self.bot_seed = fresh_bot_seed()
         self.bot_session: Optional[HumanVsAgentSession] = None
+        self.bot_pending_decision: Optional[object] = None
+        self.bot_move_task: Optional[asyncio.Task] = None
+        self.bot_turn_nonce = 0
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -109,6 +119,11 @@ class GameManager:
             if p.ws.client_state != WebSocketState.CONNECTED:
                 del self.players[mark]
                 self.state.pending[mark] = None
+
+    def cancel_bot_move_task(self) -> None:
+        if self.bot_move_task is not None and not self.bot_move_task.done():
+            self.bot_move_task.cancel()
+        self.bot_move_task = None
 
 
 # -------------------------------------------------------------------
@@ -203,6 +218,17 @@ async def broadcast_state(refresh: bool = False) -> None:
         await send_state(p.ws, p.mark, refresh=refresh)
 
 
+def pending_payload() -> Dict[str, bool]:
+    return {
+        "O": manager.state.pending[Mark.O] is not None,
+        "X": manager.state.pending[Mark.X] is not None,
+    }
+
+
+async def broadcast_pending_flags() -> None:
+    await manager.broadcast({"type": "pending_flags", "pending": pending_payload()})
+
+
 def game_over_message(winner: Optional[str]) -> str:
     if winner == "O":
         return "Game over. O wins!"
@@ -246,6 +272,85 @@ async def send_bot_explanation_to_o(mark: Mark, decision: object) -> None:
             ],
         },
     )
+
+
+async def finalize_bot_commit(summary: Dict[str, object], decision: Optional[object]) -> None:
+    await broadcast_state(refresh=True)
+    if decision is not None:
+        await send_bot_explanation_to_o(Mark.X, decision)
+
+    added = summary.get("added", {})
+    add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
+    add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
+    if add_o > 0 and Mark.O in manager.players:
+        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
+    if add_x > 0 and Mark.O in manager.players:
+        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "X", "added": add_x})
+
+    await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
+    if summary["done"]:
+        manager.game_over = True
+        winner = summary.get("winner")
+        winner_mark = winner if isinstance(winner, str) else None
+        await manager.broadcast({
+            "type": "game_over",
+            "message": game_over_message(winner_mark),
+            "winner": winner_mark,
+        })
+        return
+
+    manager.bot_turn_nonce += 1
+    await maybe_schedule_bot_move()
+
+
+async def maybe_schedule_bot_move() -> None:
+    if manager.mode != MODE_HUMAN_VS_BOT or manager.game_over:
+        return
+    if Mark.O not in manager.players:
+        return
+    if manager.state.pending[Mark.X] is not None:
+        return
+    if manager.bot_move_task is not None and not manager.bot_move_task.done():
+        return
+    if manager.bot_session is None:
+        manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
+
+    expected_turn = manager.state.turn
+    expected_nonce = manager.bot_turn_nonce
+    delay_sec = manager.bot_session.rng.uniform(1.0, 5.0)
+
+    async def _run_bot_move() -> None:
+        try:
+            await asyncio.sleep(delay_sec)
+            if manager.mode != MODE_HUMAN_VS_BOT or manager.game_over:
+                return
+            if Mark.O not in manager.players:
+                return
+            if manager.bot_turn_nonce != expected_nonce or manager.state.turn != expected_turn:
+                return
+            if manager.state.pending[Mark.X] is not None:
+                return
+            if manager.bot_session is None:
+                manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
+
+            decision = manager.bot_session.choose_decision(manager.state, Mark.X)
+            apply_move(manager.state, Mark.X, decision.row, decision.col)
+            manager.bot_pending_decision = decision
+            await broadcast_pending_flags()
+
+            if ready_to_commit(manager.state):
+                summary = commit_turn(manager.state)
+                committed_decision = manager.bot_pending_decision
+                manager.bot_pending_decision = None
+                await finalize_bot_commit(summary, committed_decision)
+        except asyncio.CancelledError:
+            return
+        except ValueError:
+            return
+        finally:
+            manager.bot_move_task = None
+
+    manager.bot_move_task = asyncio.create_task(_run_bot_move())
 
 
 @app.websocket("/ws")
@@ -294,7 +399,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         manager.mode = requested_mode
                     if manager.mode == MODE_HUMAN_VS_BOT:
                         manager.bot_seed = requested_bot_seed
+                        manager.bot_turn_nonce += 1
                         manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
+                        manager.bot_pending_decision = None
+                    else:
+                        manager.cancel_bot_move_task()
+                        manager.bot_pending_decision = None
                 else:
                     # If current host is in local mode and joiner chooses local, hand off
                     # local ownership so the joiner can run their own local game.
@@ -336,6 +446,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await manager.send(ws, {"type": "joined", "mark": mark.value})
                 await broadcast_state()
                 await broadcast_lobby()
+                if mark == Mark.O and manager.mode == MODE_HUMAN_VS_BOT:
+                    await maybe_schedule_bot_move()
 
                 if mark == Mark.O and manager.mode is None:
                     await manager.send(
@@ -374,12 +486,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 manager.mode = mode
                 if mode == MODE_HUMAN_VS_BOT:
                     manager.bot_seed = parse_bot_seed(msg.get("bot_seed"), manager.bot_seed)
+                    manager.bot_turn_nonce += 1
                     manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
+                    manager.bot_pending_decision = None
+                else:
+                    manager.cancel_bot_move_task()
+                    manager.bot_pending_decision = None
                 await manager.broadcast({"type": "mode", "mode": mode})
                 if mode == MODE_LOCAL:
                     manager.local_next_mark = Mark.O
                 await broadcast_state()
                 await broadcast_lobby()
+                if mode == MODE_HUMAN_VS_BOT:
+                    await maybe_schedule_bot_move()
 
             # --------------- MOVE ---------------
             elif mtype == "move":
@@ -435,35 +554,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
                     try:
                         apply_move(manager.state, Mark.O, row, col)
-                        if manager.bot_session is None:
-                            manager.bot_session = HumanVsAgentSession()
-                        bot_decision = manager.bot_session.choose_decision(manager.state, Mark.X)
-                        bot_row, bot_col = bot_decision.row, bot_decision.col
-                        apply_move(manager.state, Mark.X, bot_row, bot_col)
-                        summary = commit_turn(manager.state)
                     except ValueError as e:
                         await manager.send(ws, {"type": "invalid_move", "message": str(e)})
                         continue
 
-                    await broadcast_state(refresh=True)
-                    await send_bot_explanation_to_o(Mark.X, bot_decision)
-                    added = summary.get("added", {})
-                    add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
-                    add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
-                    if add_o > 0 and Mark.O in manager.players:
-                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "O", "added": add_o})
-                    if add_x > 0 and Mark.O in manager.players:
-                        await manager.send(manager.players[Mark.O].ws, {"type": "score_event", "mark": "X", "added": add_x})
-                    await manager.broadcast({"type": "turn_committed", "turn": manager.state.turn})
-                    if summary["done"]:
-                        manager.game_over = True
-                        winner = summary.get("winner")
-                        winner_mark = winner if isinstance(winner, str) else None
-                        await manager.broadcast({
-                            "type": "game_over",
-                            "message": game_over_message(winner_mark),
-                            "winner": winner_mark,
-                        })
+                    await send_state(ws, Mark.O)
+                    await broadcast_pending_flags()
+                    if ready_to_commit(manager.state):
+                        summary = commit_turn(manager.state)
+                        decision = manager.bot_pending_decision
+                        manager.bot_pending_decision = None
+                        await finalize_bot_commit(summary, decision)
+                    else:
+                        await maybe_schedule_bot_move()
                     continue
 
                 try:
@@ -525,6 +628,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         await manager.send(p.ws, {"type": "info", "message": f"{resetter_name} has reset the game."})
 
                 await broadcast_state()
+                if manager.mode == MODE_HUMAN_VS_BOT:
+                    await maybe_schedule_bot_move()
 
             else:
                 await manager.send(ws, {"type": "error", "message": f"Unknown message type: {mtype}"})
@@ -535,6 +640,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
         if mark and mark in manager.players:
             del manager.players[mark]
             manager.state.pending[mark] = None
+            if manager.mode == MODE_HUMAN_VS_BOT:
+                manager.cancel_bot_move_task()
+                manager.bot_pending_decision = None
+                manager.bot_turn_nonce += 1
             await broadcast_state()
             await broadcast_lobby()
             manager.reset_on_next_join = True

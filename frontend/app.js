@@ -284,7 +284,18 @@ function computeTurnMessage() {
     return `It is ${localNextMark}'s turn.`;
   }
   if (modeChosen === MODE_HUMAN_VS_BOT) {
-    return "It's your move against WhiskBot.";
+    const humanMoved = !!pendingFlags.O;
+    const botMoved = !!pendingFlags.X;
+    if (!humanMoved && !botMoved) {
+      return "WhiskBot hasn't moved yet.";
+    }
+    if (humanMoved && !botMoved) {
+      return "Waiting for WhiskBot's move.";
+    }
+    if (!humanMoved && botMoved) {
+      return "WhiskBot has moved. It's your turn.";
+    }
+    return "WhiskBot hasn't moved yet.";
   }
 
   const oName = playerName('O', 'first player');
@@ -853,6 +864,12 @@ function handleMessage(msg) {
         X: !!msg.pending?.X,
       };
       if (isScoreFlashActive) break;
+      if (modeChosen === MODE_HUMAN_VS_BOT) {
+        if (Date.now() >= scoreFlashExpiresAt) {
+          setStatusMessage(computeTurnMessage());
+        }
+        break;
+      }
       const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
       const youMoved = (myMark === 'O') ? !!pendingFlags.O : !!pendingFlags.X;
       const oppMoved = (myMark === 'O') ? !!pendingFlags.X : !!pendingFlags.O;
@@ -894,11 +911,8 @@ function handleMessage(msg) {
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
       if (isScoreFlashActive || Date.now() < scoreFlashExpiresAt) break;
-      if (myMark && modeChosen === MODE_LOCAL) {
+      if (myMark && (modeChosen === MODE_LOCAL || modeChosen === MODE_HUMAN_VS_BOT)) {
         setStatusMessage(computeTurnMessage());
-      } else if (myMark && modeChosen === MODE_HUMAN_VS_BOT) {
-        const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
-        setStatusMessage(`Waiting for you to make your next move. ${oppName} hasn't moved yet.`);
       }
       break;
 
