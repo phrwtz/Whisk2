@@ -586,7 +586,7 @@ def test_bot_mode_sends_explanation_event():
         msgs = _recv_until_type(ws, "turn_committed")
         explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
         assert explanation is not None
-        assert explanation["source"] in ("model_prior", "mcts", "greedy")
+        assert explanation["source"] in ("model_lookahead", "model_prior", "mcts", "greedy")
         assert "chosen" in explanation and "row" in explanation["chosen"] and "col" in explanation["chosen"]
         assert isinstance(explanation.get("candidates"), list)
 
@@ -658,7 +658,6 @@ def test_bot_mode_loads_promoted_release_artifact_end_to_end(tmp_path: Path, mon
         msgs = _recv_until_type(ws, "turn_committed")
         explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
         assert explanation is not None
-        assert explanation["source"] == "model_prior"
+        assert explanation["source"] in ("model_lookahead", "model_prior")
 
     manager.reset()
-

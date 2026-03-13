@@ -47,8 +47,8 @@ class WhiskPolicyValueModel:
         self.table: Dict[StateKey, StateStats] = {}
 
     @staticmethod
-    def state_key(obs: Dict[str, object]) -> StateKey:
-        # Compact key from board occupancy and side to move perspective.
+    def _legacy_state_key(obs: Dict[str, object]) -> StateKey:
+        """Legacy key used by older checkpoints (occupancy + viewer + turn)."""
         board_self = obs["board_self"]
         board_opp = obs["board_opponent"]
         viewer = 1 if obs["viewer_mark"] == "O" else 2
@@ -65,10 +65,58 @@ class WhiskPolicyValueModel:
                 key.append(0)
         return tuple(key)
 
+    @staticmethod
+    def state_key(obs: Dict[str, object]) -> StateKey:
+        """Feature-rich key used for newer checkpoints.
+
+        Includes pending/reserved/scores/age so online inference can react to
+        transient simultaneous-move context.
+        """
+        board_self = list(obs["board_self"])
+        board_opp = list(obs["board_opponent"])
+        reserved = list(obs.get("reserved", [0] * ActionCodec.NUM_ACTIONS))
+        age_self = list(obs.get("age_self", [0.0] * ActionCodec.NUM_ACTIONS))
+        age_opp = list(obs.get("age_opponent", [0.0] * ActionCodec.NUM_ACTIONS))
+
+        viewer = 1 if obs["viewer_mark"] == "O" else 2
+        turn_mod = int(obs["turn"]) % 256
+        pending_self = int(obs.get("pending_self", 0))
+        pending_opp = int(obs.get("pending_opponent", 0))
+        score_self = max(0, min(63, int(obs.get("score_self", 0))))
+        score_opp = max(0, min(63, int(obs.get("score_opponent", 0))))
+        score_diff = max(-63, min(63, score_self - score_opp))
+
+        key: List[int] = [
+            viewer,
+            turn_mod,
+            pending_self,
+            pending_opp,
+            score_self,
+            score_opp,
+            score_diff + 63,  # shift to non-negative bucket
+        ]
+
+        for i in range(ActionCodec.NUM_ACTIONS):
+            if board_self[i]:
+                age_bucket = max(0, min(5, int(round(float(age_self[i]) * 5))))
+                key.append(1 + age_bucket)  # 1..6
+            elif board_opp[i]:
+                age_bucket = max(0, min(5, int(round(float(age_opp[i]) * 5))))
+                key.append(10 + age_bucket)  # 10..15
+            elif reserved[i]:
+                key.append(20)
+            else:
+                key.append(0)
+        return tuple(key)
+
     def predict(self, obs: Dict[str, object]) -> Tuple[List[float], float]:
         legal_mask = list(obs["legal_action_mask"])
         key = self.state_key(obs)
         stats = self.table.get(key)
+        if stats is None:
+            # Keep compatibility with legacy checkpoints that only encoded
+            # committed occupancy/turn features.
+            stats = self.table.get(self._legacy_state_key(obs))
 
         if stats is None:
             legal_count = sum(legal_mask)

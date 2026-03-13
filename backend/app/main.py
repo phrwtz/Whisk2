@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,16 @@ MODE_LOCAL = "local"
 MODE_HUMAN_VS_BOT = "human_vs_bot"
 LEGACY_MODE_BOT = "bot"
 VALID_MODES = {MODE_REMOTE, MODE_LOCAL, MODE_HUMAN_VS_BOT}
+BOT_SEED_MOD = 2_147_483_647
+
+
+def fresh_bot_seed() -> int:
+    return secrets.randbelow(BOT_SEED_MOD - 1) + 1
+
+
+def advance_bot_seed(seed: int) -> int:
+    nxt = (int(seed) + 1) % BOT_SEED_MOD
+    return nxt if nxt != 0 else 1
 
 
 @dataclass
@@ -59,6 +70,7 @@ class GameManager:
         self.game_over = False
         self.local_next_mark = Mark.O
         if self.mode == MODE_HUMAN_VS_BOT:
+            self.bot_seed = advance_bot_seed(self.bot_seed)
             self.bot_session = HumanVsAgentSession(seed=self.bot_seed)
 
     def reset(self) -> None:
@@ -72,7 +84,7 @@ class GameManager:
         self.game_id = str(uuid.uuid4())
         self.reset_on_next_join = False
         self.bot_name = "WhiskBot"
-        self.bot_seed = 0
+        self.bot_seed = fresh_bot_seed()
         self.bot_session: Optional[HumanVsAgentSession] = None
 
     def is_full(self) -> bool:
