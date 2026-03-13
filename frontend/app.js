@@ -32,7 +32,6 @@ const modeLabel = document.getElementById('modeLabel');
 const localBtn = document.getElementById('localBtn');
 const remoteBtn = document.getElementById('remoteBtn');
 const humanVsBotBtn = document.getElementById('humanVsBotBtn');
-const botVsBotBtn = document.getElementById('botVsBotBtn');
 
 const newGameBtn = document.getElementById('newGameBtn');
 const celebrationEl = document.getElementById('celebration');
@@ -43,7 +42,6 @@ const boardEl = document.getElementById('board');
 const boardCard = document.getElementById('boardCard');
 const scoresEl = document.getElementById('scores');
 const scoresCard = document.getElementById('scoresCard');
-const cancelMachineLearningBtn = document.getElementById('cancelMachineLearningBtn');
 const messagesCard = document.getElementById('messagesCard');
 const messagesEl = document.getElementById('messages');
 const setupNoticeEl = document.getElementById('setupNotice');
@@ -64,22 +62,12 @@ let lastScoreFlashSignature = '';
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
 let suppressOpponentRevealAnimationOnce = false;
-let selfPlayRestartQueued = false;
-let selfPlayStats = {
-  gamesPlayed: 0,
-  winsO: 0,
-  winsX: 0,
-  ties: 0,
-  totalElapsedMs: 0,
-  currentGameStartedAt: 0,
-};
 const botSeedParam = new URLSearchParams(window.location.search).get('bot_seed');
 const botSeed = botSeedParam !== null && botSeedParam !== '' ? Number(botSeedParam) : null;
 let botAnalysisHistory = [];
 const MODE_LOCAL = 'local';
 const MODE_REMOTE = 'remote';
 const MODE_HUMAN_VS_BOT = 'human_vs_bot';
-const MODE_BOT_VS_BOT = 'bot_vs_bot';
 
 let players = { O: null, X: null }; // backend sends strings or null
 let scores = { O: 0, X: 0 };        // backend sends {O: number, X: number}
@@ -121,16 +109,6 @@ const BOT_INSTRUCTIONS = [
   'Click on "Join" to start a bot game.',
 ];
 
-const BOT_SELFPLAY_INSTRUCTIONS = [
-  'Whisk is a variant of Tic Tac Toe with an 8 by 8 board and scoring for 3, 4, or 5 in a row.',
-  'Machine Learning mode runs WhiskBot against itself.',
-  "Moves are simultaneous and hidden within each turn; both bots choose before the turn is revealed.",
-  'No user moves are accepted in this mode; games run automatically at machine speed.',
-  'The game ends when either side reaches 50 or more points.',
-  'This view shows aggregate outcomes across games instead of the board.',
-  'Click on "Join" to start.',
-];
-
 const WIN_VIDEO_URL = '/static/media/Win!.mp4';
 const TIE_VIDEO_URL = '/static/media/Tie!.mp4';
 
@@ -138,11 +116,7 @@ function updateJoinButtonState() {
   if (!joinBtn) return;
   const hasName = !!nameInput?.value.trim();
   const hasMode = !!selectedJoinMode || !!lobbyMode;
-  const mode = selectedJoinMode || lobbyMode;
-  const needsName = mode !== MODE_BOT_VS_BOT;
-  joinBtn.disabled = !(hasMode && (hasName || !needsName));
-  const hideSetupActions = !myMark && mode === MODE_BOT_VS_BOT;
-  if (setupActionsEl) setupActionsEl.classList.toggle('hidden', hideSetupActions);
+  joinBtn.disabled = !(hasMode && hasName);
   updateInstructionsButtonState();
 }
 
@@ -159,7 +133,7 @@ function updateInstructionsButtonState() {
     instructionsBtnSetup.disabled = !preJoinActive;
   }
 
-  const inGameActive = !!(myMark && modeChosen && modeChosen !== MODE_BOT_VS_BOT);
+  const inGameActive = !!(myMark && modeChosen);
   if (instructionsBtnGame) {
     instructionsBtnGame.classList.toggle('hidden', !inGameActive);
     instructionsBtnGame.disabled = !inGameActive;
@@ -176,10 +150,7 @@ function showSetup() {
 function showGame() {
   setupEl.classList.add('hidden');
   gameEl.classList.remove('hidden');
-  if (newGameBtn) {
-    const hideNewGame = modeChosen === MODE_BOT_VS_BOT;
-    newGameBtn.classList.toggle('hidden', hideNewGame);
-  }
+  if (newGameBtn) newGameBtn.classList.remove('hidden');
   updateInstructionsButtonState();
 }
 
@@ -217,11 +188,6 @@ function setScoresUI() {
   const oScore = scores?.O ?? 0;
   const xScore = scores?.X ?? 0;
 
-  if (modeChosen === MODE_BOT_VS_BOT) {
-    scoresEl.textContent = selfPlaySummaryText();
-    return;
-  }
-
   if (modeChosen === MODE_LOCAL) {
     scoresEl.textContent = `O: ${oScore}\nX: ${xScore}`;
     return;
@@ -257,13 +223,12 @@ function openInstructionsModal() {
   if (!activeMode) return;
   const isLocal = activeMode === MODE_LOCAL;
   const isHumanVsBot = activeMode === MODE_HUMAN_VS_BOT;
-  const isBotVsBot = activeMode === MODE_BOT_VS_BOT;
   const lines = isLocal
     ? LOCAL_INSTRUCTIONS
-    : (isHumanVsBot ? BOT_INSTRUCTIONS : (isBotVsBot ? BOT_SELFPLAY_INSTRUCTIONS : REMOTE_INSTRUCTIONS));
+    : (isHumanVsBot ? BOT_INSTRUCTIONS : REMOTE_INSTRUCTIONS);
   instructionsTitleEl.textContent = isLocal
     ? 'Local Mode Instructions'
-    : (isHumanVsBot ? 'Play Against Computer Instructions' : (isBotVsBot ? 'Machine Learning Instructions' : 'Remote Mode Instructions'));
+    : (isHumanVsBot ? 'Play Against Computer Instructions' : 'Remote Mode Instructions');
   instructionsBodyEl.innerHTML = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
   instructionsModalEl.classList.remove('hidden');
 }
@@ -277,82 +242,14 @@ function updateModePanels() {
   const hideScores = !modeChosen;
   if (scoresCard) scoresCard.classList.toggle('hidden', hideScores);
   if (messagesCard) messagesCard.classList.remove('hidden');
-  if (boardCard) boardCard.classList.toggle('hidden', modeChosen === MODE_BOT_VS_BOT);
-  if (cancelMachineLearningBtn) {
-    cancelMachineLearningBtn.classList.toggle('hidden', !(myMark && modeChosen === MODE_BOT_VS_BOT));
-  }
+  if (boardCard) boardCard.classList.remove('hidden');
   if (analysisCard) analysisCard.classList.add('hidden');
-}
-
-function resetSelfPlayStats() {
-  selfPlayStats = {
-    gamesPlayed: 0,
-    winsO: 0,
-    winsX: 0,
-    ties: 0,
-    totalElapsedMs: 0,
-    currentGameStartedAt: 0,
-  };
-}
-
-function selfPlaySummaryText() {
-  const avgMs = selfPlayStats.gamesPlayed > 0
-    ? (selfPlayStats.totalElapsedMs / selfPlayStats.gamesPlayed)
-    : 0;
-  return [
-    `O: ${scores?.O ?? 0}`,
-    `X: ${scores?.X ?? 0}`,
-    '',
-    `Games played: ${selfPlayStats.gamesPlayed}`,
-    `Won by O: ${selfPlayStats.winsO}`,
-    `Won by X: ${selfPlayStats.winsX}`,
-    `Tied: ${selfPlayStats.ties}`,
-    `Average elapsed time per game: ${avgMs.toFixed(1)} ms`,
-  ].join('\n');
 }
 
 function resetModeButtons() {
   if (localBtn) localBtn.classList.remove('mode-btn-selected');
   if (remoteBtn) remoteBtn.classList.remove('mode-btn-selected');
   if (humanVsBotBtn) humanVsBotBtn.classList.remove('mode-btn-selected');
-  if (botVsBotBtn) botVsBotBtn.classList.remove('mode-btn-selected');
-}
-
-function leaveToLanding() {
-  myMark = null;
-  modeChosen = null;
-  selectedJoinMode = null;
-  lobbyMode = null;
-  lobbyHostName = null;
-  localNextMark = 'O';
-  isGameOver = false;
-  players = { O: null, X: null };
-  lastKnownPlayers = { O: null, X: null };
-  pendingFlags = { O: false, X: false };
-  scores = { O: 0, X: 0 };
-  serverPieces = [];
-  highlightedCells = new Set();
-  visiblePieceKeys = new Set();
-  selfPlayRestartQueued = false;
-  suppressOpponentRevealAnimationOnce = false;
-  resetSelfPlayStats();
-  resetModeButtons();
-  updateModePanels();
-  updateJoinButtonState();
-  showSetup();
-  setStatusMessage('Enter your name, choose a mode, then click Join.');
-  send({ type: 'lobby' });
-}
-
-function queueSelfPlayRestart() {
-  if (selfPlayRestartQueued) return;
-  selfPlayRestartQueued = true;
-  window.setTimeout(() => {
-    selfPlayRestartQueued = false;
-    if (myMark && modeChosen === MODE_BOT_VS_BOT) {
-      send({ type: 'new_game' });
-    }
-  }, 10);
 }
 
 function computeTurnMessage() {
@@ -363,9 +260,6 @@ function computeTurnMessage() {
   }
   if (modeChosen === MODE_HUMAN_VS_BOT) {
     return "It's your move against WhiskBot.";
-  }
-  if (modeChosen === MODE_BOT_VS_BOT) {
-    return 'Machine Learning mode is running.';
   }
 
   const oName = playerName('O', 'first player');
@@ -469,18 +363,12 @@ function showScoreFlash(mark, addedScore) {
 
   const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
   let flashText;
-  if (modeChosen === MODE_BOT_VS_BOT) {
+  if (addedScore === 2) {
+    flashText = 'You got 3 in a row two different ways! You scored 2 points!';
+  } else {
     const rowLen = rowLengthFromScore(addedScore);
     const pointWord = addedScore === 1 ? 'point' : 'points';
-    flashText = `${mark} gets ${rowLen} in a row and scores ${addedScore} ${pointWord}!`;
-  } else {
-    if (addedScore === 2) {
-      flashText = 'You got 3 in a row two different ways! You scored 2 points!';
-    } else {
-      const rowLen = rowLengthFromScore(addedScore);
-      const pointWord = addedScore === 1 ? 'point' : 'points';
-      flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
-    }
+    flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
   }
   isScoreFlashActive = true;
   lastScoreFlashSignature = signature;
@@ -724,14 +612,13 @@ function render() {
   }
 
   // If not joined or game is over, disable all interactions.
-  if (!myMark || isGameOver || modeChosen === MODE_BOT_VS_BOT) {
+  if (!myMark || isGameOver) {
     cells.forEach((c) => (c.disabled = true));
   }
 }
 
 function onCellClick(r, c) {
   if (!myMark || isGameOver) return;
-  if (modeChosen === MODE_BOT_VS_BOT) return;
   if (modeChosen === MODE_REMOTE) {
     const oppMark = myMark === 'O' ? 'X' : 'O';
     suppressOpponentRevealAnimationOnce = !!pendingFlags[oppMark];
@@ -748,10 +635,6 @@ function setMode(mode) {
     if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === MODE_LOCAL);
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === MODE_REMOTE);
     if (humanVsBotBtn) humanVsBotBtn.classList.toggle('mode-btn-selected', mode === MODE_HUMAN_VS_BOT);
-    if (botVsBotBtn) botVsBotBtn.classList.toggle('mode-btn-selected', mode === MODE_BOT_VS_BOT);
-    if (mode === MODE_BOT_VS_BOT) {
-      join(MODE_BOT_VS_BOT);
-    }
     return;
   }
 
@@ -761,7 +644,7 @@ function setMode(mode) {
   }
 
   const payload = { type: 'set_mode', mode };
-  if ((mode === MODE_HUMAN_VS_BOT || mode === MODE_BOT_VS_BOT) && Number.isFinite(botSeed)) {
+  if (mode === MODE_HUMAN_VS_BOT && Number.isFinite(botSeed)) {
     payload.bot_seed = Math.trunc(botSeed);
   }
   send(payload);
@@ -771,7 +654,7 @@ function setMode(mode) {
 function join(mode = null) {
   const name = (nameInput.value || '').trim() || 'Player';
   const payload = { type: 'join', name, mode };
-  if ((mode === MODE_HUMAN_VS_BOT || mode === MODE_BOT_VS_BOT) && Number.isFinite(botSeed)) {
+  if (mode === MODE_HUMAN_VS_BOT && Number.isFinite(botSeed)) {
     payload.bot_seed = Math.trunc(botSeed);
   }
   send(payload);
@@ -790,8 +673,6 @@ function updatePreJoinUiFromLobby() {
       setStatusMessage(`${lobbyHostName} is playing Whisk in local mode so you can't join at this time. But you are welcome to play in local mode. Just enter your name and click "Join".`);
     } else if (lobbyMode === MODE_HUMAN_VS_BOT) {
       setStatusMessage(`${lobbyHostName} is playing against WhiskBot right now.`);
-    } else if (lobbyMode === MODE_BOT_VS_BOT) {
-      setStatusMessage(`${lobbyHostName} is running Machine Learning mode right now.`);
     } else if (lobbyMode === MODE_REMOTE) {
       setStatusMessage(`Please join ${lobbyHostName} to play Whisk.`);
     }
@@ -849,7 +730,7 @@ function handleMessage(msg) {
     }
 
     case 'need_mode':
-      setStatusMessage('Choose Local, Remote, Play Against Computer, or Machine Learning before joining.');
+      setStatusMessage('Choose Local, Remote, or Play Against Computer before joining.');
       break;
 
     case 'mode': {
@@ -858,13 +739,7 @@ function handleMessage(msg) {
       showGame();
       updateModePanels();
       updateInstructionsButtonState();
-      if (modeChosen !== MODE_BOT_VS_BOT) {
-        selfPlayRestartQueued = false;
-      } else if (prevMode !== MODE_BOT_VS_BOT) {
-        resetSelfPlayStats();
-        setScoresUI();
-      }
-      if (modeChosen === MODE_HUMAN_VS_BOT || modeChosen === MODE_BOT_VS_BOT) {
+      if (modeChosen === MODE_HUMAN_VS_BOT) {
         resetBotAnalysisPanel();
       }
       setStatusMessage(computeTurnMessage());
@@ -933,10 +808,6 @@ function handleMessage(msg) {
       }
       break;
 
-    case 'left':
-      leaveToLanding();
-      break;
-
     case 'bot_explanation':
       if (modeChosen === MODE_HUMAN_VS_BOT && Date.now() >= scoreFlashExpiresAt) {
         const text = formatBotExplanation(msg);
@@ -961,33 +832,11 @@ function handleMessage(msg) {
       } else if (myMark && modeChosen === MODE_HUMAN_VS_BOT) {
         const oppName = (myMark === 'O') ? playerName('X', 'Player 2') : playerName('O', 'Player 1');
         setStatusMessage(`Waiting for you to make your next move. ${oppName} hasn't moved yet.`);
-      } else if (myMark && modeChosen === MODE_BOT_VS_BOT) {
-        setStatusMessage('Machine Learning mode is running.');
       }
       break;
 
     case 'game_over':
       isGameOver = true;
-      if (modeChosen === MODE_BOT_VS_BOT) {
-        const winner = msg.winner === 'O' || msg.winner === 'X' ? msg.winner : (msg.winner === 'TIE' ? 'TIE' : null);
-        if (winner === 'O') {
-          selfPlayStats.winsO += 1;
-        } else if (winner === 'X') {
-          selfPlayStats.winsX += 1;
-        } else {
-          selfPlayStats.ties += 1;
-        }
-        selfPlayStats.gamesPlayed += 1;
-        if (selfPlayStats.currentGameStartedAt > 0) {
-          selfPlayStats.totalElapsedMs += Math.max(0, Date.now() - selfPlayStats.currentGameStartedAt);
-        }
-        selfPlayStats.currentGameStartedAt = 0;
-        setScoresUI();
-        setStatusMessage('Machine Learning game complete. Starting next game...');
-        queueSelfPlayRestart();
-        render();
-        break;
-      }
       // Show a big red banner + embedded MP4 in the Messages card.
       if (msg.message && msg.message.toLowerCase().includes('tie')) {
         showGameOverMedia('tie', "It's a tie!");
@@ -1043,13 +892,7 @@ function handleMessage(msg) {
         modeChosen = msg.mode === 'bot' ? MODE_HUMAN_VS_BOT : msg.mode;
         updateModePanels();
         updateInstructionsButtonState();
-        if (modeChosen !== MODE_BOT_VS_BOT) {
-          selfPlayRestartQueued = false;
-        } else if (prevMode !== MODE_BOT_VS_BOT) {
-          resetSelfPlayStats();
-          setScoresUI();
-        }
-        if (modeChosen !== MODE_HUMAN_VS_BOT && modeChosen !== MODE_BOT_VS_BOT) {
+        if (modeChosen !== MODE_HUMAN_VS_BOT) {
           resetBotAnalysisPanel();
         }
       }
@@ -1063,9 +906,6 @@ function handleMessage(msg) {
 
       if (msg.pieces) {
         let appearing = detectAppearingPieces(msg.pieces);
-        if (modeChosen === MODE_BOT_VS_BOT) {
-          appearing = [];
-        }
         // Remote-mode special case: when you're the second mover, the
         // opponent's piece may appear only as a reveal of an already-placed
         // move. Animate only your own newly committed piece.
@@ -1080,10 +920,6 @@ function handleMessage(msg) {
         }
         serverPieces = msg.pieces;
         queueMoveAnimations(appearing);
-      }
-
-      if (modeChosen === MODE_BOT_VS_BOT && !isGameOver && (msg.turn ?? 0) === 0 && selfPlayStats.currentGameStartedAt === 0) {
-        selfPlayStats.currentGameStartedAt = Date.now();
       }
 
       setScoresUI();
@@ -1104,7 +940,7 @@ function handleMessage(msg) {
         showGame();
       }
 
-      if ((modeChosen === MODE_HUMAN_VS_BOT || modeChosen === MODE_BOT_VS_BOT) && msg.turn === 0 && msg.refresh) {
+      if (modeChosen === MODE_HUMAN_VS_BOT && msg.turn === 0 && msg.refresh) {
         resetBotAnalysisPanel();
       }
 
@@ -1126,19 +962,11 @@ nameInput.addEventListener('input', updateJoinButtonState);
 localBtn.addEventListener('click', () => setMode(MODE_LOCAL));
 remoteBtn.addEventListener('click', () => setMode(MODE_REMOTE));
 if (humanVsBotBtn) humanVsBotBtn.addEventListener('click', () => setMode(MODE_HUMAN_VS_BOT));
-if (botVsBotBtn) botVsBotBtn.addEventListener('click', () => setMode(MODE_BOT_VS_BOT));
 
 if (newGameBtn) {
   newGameBtn.addEventListener('click', () => {
     if (!myMark) return;
     send({ type: 'new_game' });
-  });
-}
-if (cancelMachineLearningBtn) {
-  cancelMachineLearningBtn.addEventListener('click', () => {
-    if (modeChosen !== MODE_BOT_VS_BOT) return;
-    send({ type: 'leave' });
-    leaveToLanding();
   });
 }
 
