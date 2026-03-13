@@ -10,6 +10,10 @@ from .env import WhiskEnv
 from .policy import Agent
 from ..game import Mark
 
+POST_MIN_DELAY_SEC = 0.1
+POST_MAX_DELAY_SEC = 0.5
+POST_SIMULTANEOUS_EPSILON_SEC = 0.02
+
 
 @dataclass
 class GameResult:
@@ -63,12 +67,26 @@ class Arena:
             action_o = agent_o.select_action(env, Mark.O, rng)
             action_x = agent_x.select_action(env, Mark.X, rng)
 
-            # If both agents target the same cell, keep O's choice and reroute X.
+            # If both agents target the same cell, only the second submitter reroutes.
             if action_x == action_o:
-                alternatives = [coord for coord in legal_x if coord != action_o]
-                if not alternatives:
-                    break
-                action_x = rng.choice(alternatives)
+                o_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                x_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                if abs(o_delay - x_delay) <= POST_SIMULTANEOUS_EPSILON_SEC:
+                    first_mark = rng.choice([Mark.O, Mark.X])
+                elif o_delay < x_delay:
+                    first_mark = Mark.O
+                else:
+                    first_mark = Mark.X
+                if first_mark == Mark.O:
+                    alternatives_x = [coord for coord in legal_x if coord != action_o]
+                    if not alternatives_x:
+                        break
+                    action_x = rng.choice(alternatives_x)
+                else:
+                    alternatives_o = [coord for coord in legal_o if coord != action_x]
+                    if not alternatives_o:
+                        break
+                    action_o = rng.choice(alternatives_o)
 
             env.step_joint(action_o, action_x)
 

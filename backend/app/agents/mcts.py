@@ -17,6 +17,9 @@ from .model import WhiskPolicyValueModel
 from ..game import Mark
 
 Coord = Tuple[int, int]
+POST_MIN_DELAY_SEC = 0.1
+POST_MAX_DELAY_SEC = 0.5
+POST_SIMULTANEOUS_EPSILON_SEC = 0.02
 
 
 @dataclass
@@ -133,17 +136,54 @@ class MCTS:
         sim_env = env.clone()
         opponent = Mark.X if player == Mark.O else Mark.O
 
-        my_coord = ActionCodec.action_to_coord(action)
-        opp_coord = self._sample_opponent_action(sim_env, opponent, rng, forbid=my_coord)
+        player_coord = ActionCodec.action_to_coord(action)
+        opp_coord = self._sample_model_action(sim_env, opponent, rng)
+        if opp_coord is None:
+            raise RuntimeError("Opponent has no legal actions")
+        if opp_coord == player_coord:
+            p_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+            o_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+            if abs(p_delay - o_delay) <= POST_SIMULTANEOUS_EPSILON_SEC:
+                first_mark = rng.choice([player, opponent])
+            elif p_delay < o_delay:
+                first_mark = player
+            else:
+                first_mark = opponent
+            if first_mark == player:
+                # Opponent retried as second mover.
+                opp_coord = self._sample_opponent_action(sim_env, opponent, rng, forbid=player_coord)
+            else:
+                # Player retried as second mover.
+                retry_player = self._sample_model_action(sim_env, player, rng, forbid=opp_coord)
+                if retry_player is None:
+                    legal = sim_env.legal_actions(player)
+                    legal = [c for c in legal if c != opp_coord]
+                    if not legal:
+                        raise RuntimeError("Player has no legal actions after collision")
+                    retry_player = rng.choice(legal)
+                player_coord = retry_player
         if player == Mark.O:
-            sim_env.step_joint(my_coord, opp_coord)
+            sim_env.step_joint(player_coord, opp_coord)
         else:
-            sim_env.step_joint(opp_coord, my_coord)
+            sim_env.step_joint(opp_coord, player_coord)
 
         # Short stochastic rollout guided by model priors.
         while not sim_env.is_terminal() and sim_env.state.turn < self.rollout_max_turns:
             a_o = self._sample_model_action(sim_env, Mark.O, rng)
-            a_x = self._sample_model_action(sim_env, Mark.X, rng, forbid=a_o)
+            a_x = self._sample_model_action(sim_env, Mark.X, rng)
+            if a_o is not None and a_x is not None and a_o == a_x:
+                o_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                x_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                if abs(o_delay - x_delay) <= POST_SIMULTANEOUS_EPSILON_SEC:
+                    first_mark = rng.choice([Mark.O, Mark.X])
+                elif o_delay < x_delay:
+                    first_mark = Mark.O
+                else:
+                    first_mark = Mark.X
+                if first_mark == Mark.O:
+                    a_x = self._sample_model_action(sim_env, Mark.X, rng, forbid=a_o)
+                else:
+                    a_o = self._sample_model_action(sim_env, Mark.O, rng, forbid=a_x)
             if a_o is None or a_x is None:
                 break
             sim_env.step_joint(a_o, a_x)

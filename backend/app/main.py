@@ -42,6 +42,9 @@ MODE_HUMAN_VS_BOT = "human_vs_bot"
 MODE_BOT_VS_BOT = "bot_vs_bot"
 LEGACY_MODE_BOT = "bot"
 VALID_MODES = {MODE_REMOTE, MODE_LOCAL, MODE_HUMAN_VS_BOT, MODE_BOT_VS_BOT}
+AUTOPLAY_MIN_DELAY_SEC = 0.1
+AUTOPLAY_MAX_DELAY_SEC = 0.5
+AUTOPLAY_SIMULTANEOUS_EPSILON_SEC = 0.02
 
 
 @dataclass
@@ -261,17 +264,25 @@ async def maybe_start_bot_vs_bot_loop() -> None:
 
 
 async def run_bot_vs_bot_loop(game_id: str) -> None:
+    def _is_stale() -> bool:
+        return (
+            game_id != manager.game_id
+            or manager.mode != MODE_BOT_VS_BOT
+            or manager.game_over
+            or Mark.O not in manager.players
+        )
+
+    async def _wait_or_abort(delay_sec: float) -> bool:
+        if delay_sec <= 0:
+            return not _is_stale()
+        await asyncio.sleep(delay_sec)
+        return not _is_stale()
+
     while True:
-        # Yield to the event loop while still running at machine speed.
+        # Yield to the event loop between turns.
         await asyncio.sleep(0)
 
-        if game_id != manager.game_id:
-            return
-        if manager.mode != MODE_BOT_VS_BOT:
-            return
-        if manager.game_over:
-            return
-        if Mark.O not in manager.players:
+        if _is_stale():
             return
 
         try:
@@ -282,18 +293,39 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
             o_decision = manager.bot_session.choose_decision(base_state, Mark.O)
             x_decision = manager.bot_session.choose_decision(base_state, Mark.X)
 
-            apply_move(manager.state, Mark.O, o_decision.row, o_decision.col)
+            o_delay = random.uniform(AUTOPLAY_MIN_DELAY_SEC, AUTOPLAY_MAX_DELAY_SEC)
+            x_delay = random.uniform(AUTOPLAY_MIN_DELAY_SEC, AUTOPLAY_MAX_DELAY_SEC)
+            if abs(o_delay - x_delay) <= AUTOPLAY_SIMULTANEOUS_EPSILON_SEC:
+                first_mark = random.choice([Mark.O, Mark.X])
+            elif o_delay < x_delay:
+                first_mark = Mark.O
+            else:
+                first_mark = Mark.X
+            second_mark = Mark.X if first_mark == Mark.O else Mark.O
+
+            first_decision = o_decision if first_mark == Mark.O else x_decision
+            second_decision = x_decision if first_mark == Mark.O else o_decision
+            first_delay = o_delay if first_mark == Mark.O else x_delay
+            second_delay = x_delay if first_mark == Mark.O else o_delay
+
+            if not await _wait_or_abort(first_delay):
+                return
+            apply_move(manager.state, first_mark, first_decision.row, first_decision.col)
+
+            if not await _wait_or_abort(max(0.0, second_delay - first_delay)):
+                return
             try:
-                apply_move(manager.state, Mark.X, x_decision.row, x_decision.col)
+                # A collision only occurs if the second mover selected the
+                # first mover's square after first submission was accepted.
+                apply_move(manager.state, second_mark, second_decision.row, second_decision.col)
             except ValueError:
-                # If both chose the same square, X retries after having made one move
-                # (matching remote-mode semantics where O is hidden until X moves).
+                # Reroute only the second mover after collision.
                 retry_state = deepcopy(manager.state)
                 applied = False
                 for _ in range(6):
-                    x_retry = manager.bot_session.choose_decision(retry_state, Mark.X)
+                    second_retry = manager.bot_session.choose_decision(retry_state, second_mark)
                     try:
-                        apply_move(manager.state, Mark.X, x_retry.row, x_retry.col)
+                        apply_move(manager.state, second_mark, second_retry.row, second_retry.col)
                         applied = True
                         break
                     except ValueError:
@@ -311,7 +343,7 @@ async def run_bot_vs_bot_loop(game_id: str) -> None:
                             break
                     if fallback is None:
                         continue
-                    apply_move(manager.state, Mark.X, fallback[0], fallback[1])
+                    apply_move(manager.state, second_mark, fallback[0], fallback[1])
 
             summary = commit_turn(manager.state)
         except asyncio.CancelledError:

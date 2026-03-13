@@ -5,21 +5,21 @@
     "min_promotion_rate": 0.4,
     "min_latest_vs_random": 0.55,
     "min_best_vs_random": 0.6,
-    "min_latest_replay_size": 32
+    "min_latest_replay_size": 100
   },
-  "passed": true,
+  "passed": false,
   "checks": [
     {
       "name": "min_generations",
-      "actual": 3,
+      "actual": 45,
       "required": 3,
       "passed": true
     },
     {
       "name": "min_promotion_rate",
-      "actual": 1.0,
+      "actual": 0.28888888888888886,
       "required": 0.4,
-      "passed": true
+      "passed": false
     },
     {
       "name": "min_latest_vs_random",
@@ -35,16 +35,16 @@
     },
     {
       "name": "min_latest_replay_size",
-      "actual": 32,
-      "required": 32,
+      "actual": 16034,
+      "required": 100,
       "passed": true
     }
   ],
   "summary": {
-    "total_generations": 3,
-    "promotion_rate": 1.0,
+    "total_generations": 45,
+    "promotion_rate": 0.28888888888888886,
     "latest_candidate_vs_random": 1.0,
     "best_candidate_vs_random": 1.0,
-    "latest_replay_size": 32
+    "latest_replay_size": 16034
   }
 }

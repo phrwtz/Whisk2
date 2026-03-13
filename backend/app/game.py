@@ -91,6 +91,19 @@ DIRECTIONS: List[Coord] = [
     (1, -1),  # diag down-left
 ]
 
+# Precomputed exact-line windows for scoring lengths.
+# Each entry stores:
+# - cells in the window
+# - coordinate immediately before the window (or None if out of bounds)
+# - coordinate immediately after the window (or None if out of bounds)
+WindowDef = Tuple[Tuple[Coord, ...], Optional[Coord], Optional[Coord]]
+WINDOW_DEFS: Dict[int, List[WindowDef]] = {3: [], 4: [], 5: []}
+WINDOW_DEFS_BY_MOVE: Dict[int, Dict[Coord, List[WindowDef]]] = {
+    3: {},
+    4: {},
+    5: {},
+}
+
 
 def in_bounds(r: int, c: int) -> bool:
     return 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE
@@ -101,26 +114,51 @@ def _window_cells(start: Coord, dr: int, dc: int, length: int) -> List[Coord]:
     return [(sr + i * dr, sc + i * dc) for i in range(length)]
 
 
+def _build_window_defs() -> None:
+    for length in (3, 4, 5):
+        defs: List[WindowDef] = []
+        by_move: Dict[Coord, List[WindowDef]] = {}
+        for r in range(BOARD_SIZE):
+            for c in range(BOARD_SIZE):
+                for dr, dc in DIRECTIONS:
+                    cells = tuple(_window_cells((r, c), dr, dc, length))
+                    if not all(in_bounds(rr, cc) for rr, cc in cells):
+                        continue
+                    br, bc = r - dr, c - dc
+                    ar, ac = r + length * dr, c + length * dc
+                    before = (br, bc) if in_bounds(br, bc) else None
+                    after = (ar, ac) if in_bounds(ar, ac) else None
+                    wd = (cells, before, after)
+                    defs.append(wd)
+                    for coord in cells:
+                        by_move.setdefault(coord, []).append(wd)
+        WINDOW_DEFS[length] = defs
+        WINDOW_DEFS_BY_MOVE[length] = by_move
+
+
+def _is_exact_line(
+    occ: Dict[Coord, Mark], mark: Mark, cells: Tuple[Coord, ...], before: Optional[Coord], after: Optional[Coord]
+) -> bool:
+    if not all(occ.get(coord) == mark for coord in cells):
+        return False
+    before_ok = before is None or occ.get(before) != mark
+    if not before_ok:
+        return False
+    after_ok = after is None or occ.get(after) != mark
+    return after_ok
+
+
+_build_window_defs()
+
+
 def _scoring_line_windows(
     occ: Dict[Coord, Mark], mark: Mark, length: int
 ) -> List[List[Coord]]:
     """Return all "exact" lines of `length` for `mark`."""
     windows: List[List[Coord]] = []
-    for r in range(BOARD_SIZE):
-        for c in range(BOARD_SIZE):
-            for dr, dc in DIRECTIONS:
-                cells = _window_cells((r, c), dr, dc, length)
-                if not all(in_bounds(rr, cc) for rr, cc in cells):
-                    continue
-                if not all(occ.get((rr, cc)) == mark for rr, cc in cells):
-                    continue
-
-                br, bc = r - dr, c - dc
-                ar, ac = r + length * dr, c + length * dc
-                before_ok = (not in_bounds(br, bc)) or (occ.get((br, bc)) != mark)
-                after_ok = (not in_bounds(ar, ac)) or (occ.get((ar, ac)) != mark)
-                if before_ok and after_ok:
-                    windows.append(cells)
+    for cells, before, after in WINDOW_DEFS[length]:
+        if _is_exact_line(occ, mark, cells, before, after):
+            windows.append(list(cells))
     return windows
 
 
@@ -147,9 +185,9 @@ def scoring_coords_for_pending_move(
     """Return scoring coords for lines that include the pending move."""
     coords: Set[Coord] = set()
     for length in (3, 4, 5):
-        for line in _scoring_line_windows(occ, mark, length):
-            if pending_coord in line:
-                coords.update(line)
+        for cells, before, after in WINDOW_DEFS_BY_MOVE[length].get(pending_coord, []):
+            if _is_exact_line(occ, mark, cells, before, after):
+                coords.update(cells)
     return coords
 
 
@@ -160,8 +198,8 @@ def score_for_move(
     score = 0
     for length, points in ((3, 1), (4, 4), (5, 9)):
         count = 0
-        for line in _scoring_line_windows(occ, mark, length):
-            if move_coord in line:
+        for cells, before, after in WINDOW_DEFS_BY_MOVE[length].get(move_coord, []):
+            if _is_exact_line(occ, mark, cells, before, after):
                 count += 1
         score += count * points
     return score

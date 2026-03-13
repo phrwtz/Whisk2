@@ -13,6 +13,10 @@ from .mcts import MCTS
 from .model import WhiskPolicyValueModel
 from ..game import Mark
 
+POST_MIN_DELAY_SEC = 0.1
+POST_MAX_DELAY_SEC = 0.5
+POST_SIMULTANEOUS_EPSILON_SEC = 0.02
+
 
 @dataclass
 class SelfPlayConfig:
@@ -29,6 +33,7 @@ def _generate_examples_shard(
     max_turns: int,
     simulations: int,
     shard_offset: int,
+    progress_interval: int = 0,
 ) -> List[Dict[str, object]]:
     model = WhiskPolicyValueModel()
     model.table = model_table
@@ -55,7 +60,28 @@ def _generate_examples_shard(
             pi_x = mcts.search(env, Mark.X, rng)
 
             action_o = SelfPlayRunner._sample_action(pi_o, obs_o["legal_action_mask"], rng)
-            action_x = SelfPlayRunner._sample_action(pi_x, obs_x["legal_action_mask"], rng, forbid=action_o)
+            action_x = SelfPlayRunner._sample_action(pi_x, obs_x["legal_action_mask"], rng)
+
+            # Resolve collisions by post order: only the second submitter retries.
+            if action_o is not None and action_x is not None and action_o == action_x:
+                o_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                x_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                if abs(o_delay - x_delay) <= POST_SIMULTANEOUS_EPSILON_SEC:
+                    first_mark = rng.choice([Mark.O, Mark.X])
+                elif o_delay < x_delay:
+                    first_mark = Mark.O
+                else:
+                    first_mark = Mark.X
+                if first_mark == Mark.O:
+                    # X is second mover; reroute X if it collided with O.
+                    action_x = SelfPlayRunner._sample_action(
+                        pi_x, obs_x["legal_action_mask"], rng, forbid=action_o
+                    )
+                else:
+                    # O is second mover; reroute O if it collided with X.
+                    action_o = SelfPlayRunner._sample_action(
+                        pi_o, obs_o["legal_action_mask"], rng, forbid=action_x
+                    )
 
             if action_o is None or action_x is None:
                 break
@@ -90,6 +116,15 @@ def _generate_examples_shard(
             ex["value_target"] = z
             examples.append(ex)
 
+        if progress_interval > 0 and (
+            (local_game_idx + 1) % progress_interval == 0 or (local_game_idx + 1) == games
+        ):
+            print(
+                f"[selfplay] completed {local_game_idx + 1}/{games} games in shard "
+                f"(seed={seed}, offset={shard_offset})",
+                flush=True,
+            )
+
     return examples
 
 
@@ -101,6 +136,7 @@ class SelfPlayRunner:
     def generate_examples(self, workers: int = 1) -> List[Dict[str, object]]:
         if self.config.games <= 0:
             raise ValueError("games must be > 0")
+        progress_interval = max(1, self.config.games // 10)
         if workers <= 1:
             return _generate_examples_shard(
                 model_table=self.model.table,
@@ -109,6 +145,7 @@ class SelfPlayRunner:
                 max_turns=self.config.max_turns,
                 simulations=self.config.simulations,
                 shard_offset=0,
+                progress_interval=progress_interval,
             )
 
         workers = min(max(1, workers), self.config.games)
@@ -132,6 +169,7 @@ class SelfPlayRunner:
                         self.config.max_turns,
                         self.config.simulations,
                         offset,
+                        progress_interval,
                     )
                 )
                 offset += sz

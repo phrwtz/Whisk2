@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--replay-capacity", type=int, default=20000)
     parser.add_argument("--replay-sample-size", type=int, default=4000)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--quiet", action="store_true", help="Disable periodic progress logs")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=Path("artifacts/checkpoints/m6_best.pkl"))
     parser.add_argument("--replay", type=Path, default=Path("artifacts/checkpoints/replay_buffer.pkl"))
@@ -51,6 +52,7 @@ def main() -> None:
         replay_sample_size=args.replay_sample_size,
         seed=args.seed,
         resume=args.resume,
+        progress=not args.quiet,
     )
     trainer = Trainer(cfg)
     summary = trainer.train(args.out, replay_path=args.replay)

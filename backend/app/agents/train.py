@@ -9,6 +9,7 @@ Adds:
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -23,6 +24,10 @@ from .model import WhiskPolicyValueModel
 from .replay import ReplayBuffer
 from .selfplay import SelfPlayConfig, SelfPlayRunner
 from ..game import Mark
+
+POST_MIN_DELAY_SEC = 0.1
+POST_MAX_DELAY_SEC = 0.5
+POST_SIMULTANEOUS_EPSILON_SEC = 0.02
 
 
 @dataclass
@@ -40,6 +45,7 @@ class TrainConfig:
     replay_sample_size: int = 4000
     seed: int = 0
     resume: bool = False
+    progress: bool = False
 
 
 class ModelAgent:
@@ -73,6 +79,10 @@ class Trainer:
     def __init__(self, config: TrainConfig) -> None:
         self.config = config
         self.best_model = WhiskPolicyValueModel()
+
+    def _log(self, message: str) -> None:
+        if self.config.progress:
+            print(message, flush=True)
 
     def train(self, checkpoint_path: Path, replay_path: Path | None = None) -> Dict[str, object]:
         if self.config.iterations <= 0:
@@ -110,11 +120,20 @@ class Trainer:
             start_generation = 1
 
         end_generation = start_generation + self.config.iterations - 1
+        overall_start = time.perf_counter()
+        generation_durations: List[float] = []
+        self._log(
+            f"[train] start generations {start_generation}..{end_generation}, "
+            f"games/iter={self.config.games_per_iteration}, sims={self.config.selfplay_simulations}, "
+            f"workers={self.config.selfplay_workers}"
+        )
 
         best_win_rate_vs_random = self.evaluate_vs_random(self.best_model, seed=self.config.seed)
         latest_examples = 0
 
         for generation in range(start_generation, end_generation + 1):
+            gen_start = time.perf_counter()
+            self._log(f"[train] generation {generation}/{end_generation} started")
             # Deterministic per-generation seed spacing.
             gen_seed = self.config.seed + generation * 10_000
 
@@ -133,6 +152,7 @@ class Trainer:
                 # Safe fallback if multiprocessing is unavailable in runtime.
                 examples = sp.generate_examples(workers=1)
             latest_examples = len(examples)
+            self._log(f"[train] generation {generation} self-play complete: {latest_examples} examples")
 
             replay.add_examples(examples)
             replay.save(replay_path)
@@ -185,11 +205,30 @@ class Trainer:
                     metrics=metrics,
                 )
 
+            gen_elapsed = time.perf_counter() - gen_start
+            generation_durations.append(gen_elapsed)
+            done_count = generation - start_generation + 1
+            remaining = max(0, self.config.iterations - done_count)
+            avg_gen = sum(generation_durations) / len(generation_durations)
+            eta_sec = avg_gen * remaining
+            pct_complete = (done_count / max(1, self.config.iterations)) * 100.0
+            self._log(
+                f"[train] progress: {done_count}/{self.config.iterations} iterations "
+                f"({pct_complete:.1f}% complete)"
+            )
+            self._log(
+                f"[train] generation {generation} done in {gen_elapsed:.1f}s; "
+                f"promoted={promoted}; candidate_vs_best={head_to_head['candidate_win_rate']:.3f}; "
+                f"replay={len(replay.items)}; ETA~{eta_sec/60:.1f}m"
+            )
+
         best_path = manager.best_path() or checkpoint_path
         if best_path != checkpoint_path:
             loaded = WhiskPolicyValueModel.load(best_path)
             loaded.save(checkpoint_path)
 
+        total_elapsed = time.perf_counter() - overall_start
+        self._log(f"[train] completed in {total_elapsed/60:.1f} minutes")
         return {
             "iterations": self.config.iterations,
             "start_generation": start_generation,
@@ -222,10 +261,24 @@ class Trainer:
                 a_o = model_agent.select_action(env, Mark.O, rng)
                 a_x = random_agent.select_action(env, Mark.X, rng)
                 if a_x == a_o:
-                    legal_x = [c for c in env.legal_actions(Mark.X) if c != a_o]
-                    if not legal_x:
-                        break
-                    a_x = rng.choice(legal_x)
+                    o_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                    x_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
+                    if abs(o_delay - x_delay) <= POST_SIMULTANEOUS_EPSILON_SEC:
+                        first_mark = rng.choice([Mark.O, Mark.X])
+                    elif o_delay < x_delay:
+                        first_mark = Mark.O
+                    else:
+                        first_mark = Mark.X
+                    if first_mark == Mark.O:
+                        legal_x = [c for c in env.legal_actions(Mark.X) if c != a_o]
+                        if not legal_x:
+                            break
+                        a_x = rng.choice(legal_x)
+                    else:
+                        legal_o = [c for c in env.legal_actions(Mark.O) if c != a_x]
+                        if not legal_o:
+                            break
+                        a_o = rng.choice(legal_o)
 
                 env.step_joint(a_o, a_x)
 
