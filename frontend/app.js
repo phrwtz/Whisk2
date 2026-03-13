@@ -215,10 +215,12 @@ function updatePreJoinSetupNotice() {
   setStatusMessage('Enter your name then click Join.');
 }
 
-function updateNameInputVisibility() {
-  if (myMark || !nameRow) return;
+function updatePreJoinSetupLayout() {
+  if (myMark) return;
   const mode = instructionsMode();
-  nameRow.classList.toggle('hidden', mode === MODE_HUMAN_VS_BOT);
+  const hasMode = !!mode;
+  if (setupActionsEl) setupActionsEl.classList.toggle('hidden', !hasMode);
+  if (nameRow) nameRow.classList.toggle('hidden', !hasMode || mode === MODE_HUMAN_VS_BOT);
 }
 
 function setStatusMessage(text) {
@@ -691,8 +693,8 @@ function setMode(mode) {
   if (!myMark) {
     selectedJoinMode = mode;
     lobbyMode = mode;
+    updatePreJoinSetupLayout();
     updateJoinButtonState();
-    updateNameInputVisibility();
     updatePreJoinSetupNotice();
     if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === MODE_LOCAL);
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === MODE_REMOTE);
@@ -732,7 +734,7 @@ function updatePreJoinUiFromLobby() {
     if (modePicker) modePicker.classList.add('hidden');
     if (modeLabel) modeLabel.classList.add('hidden');
     selectedJoinMode = lobbyMode || selectedJoinMode;
-    updateNameInputVisibility();
+    updatePreJoinSetupLayout();
     updateJoinButtonState();
     if (lobbyMode === MODE_LOCAL) {
       setStatusMessage(`${lobbyHostName} is playing Whisk in local mode so you can't join at this time. But you are welcome to play in local mode. Just enter your name and click "Join".`);
@@ -744,7 +746,7 @@ function updatePreJoinUiFromLobby() {
   } else {
     if (modePicker) modePicker.classList.remove('hidden');
     if (modeLabel) modeLabel.classList.remove('hidden');
-    updateNameInputVisibility();
+    updatePreJoinSetupLayout();
     updateJoinButtonState();
     updatePreJoinSetupNotice();
   }
