@@ -20,6 +20,7 @@ const gameEl = document.getElementById('game');
 const nameInput = document.getElementById('nameInput');
 const joinBtn = document.getElementById('joinBtn');
 const setupActionsEl = document.getElementById('setupActions');
+const nameRow = document.getElementById('nameRow');
 const instructionsBtnSetup = document.getElementById('instructionsBtnSetup');
 const instructionsBtnGame = document.getElementById('instructionsBtnGame');
 const instructionsModalEl = document.getElementById('instructionsModal');
@@ -114,8 +115,10 @@ const TIE_VIDEO_URL = '/static/media/Tie!.mp4';
 
 function updateJoinButtonState() {
   if (!joinBtn) return;
-  const hasName = !!nameInput?.value.trim();
-  const hasMode = !!selectedJoinMode || !!lobbyMode;
+  const activeMode = instructionsMode();
+  const requiresName = activeMode !== MODE_HUMAN_VS_BOT;
+  const hasName = !requiresName || !!nameInput?.value.trim();
+  const hasMode = !!activeMode;
   joinBtn.disabled = !(hasMode && hasName);
   updateInstructionsButtonState();
 }
@@ -127,7 +130,7 @@ function instructionsMode() {
 
 function updateInstructionsButtonState() {
   const activeMode = instructionsMode();
-  const preJoinActive = !myMark && !joinBtn.disabled && !!activeMode;
+  const preJoinActive = !myMark && !!activeMode;
   if (instructionsBtnSetup) {
     instructionsBtnSetup.classList.toggle('hidden', !preJoinActive);
     instructionsBtnSetup.disabled = !preJoinActive;
@@ -192,10 +195,30 @@ function setScoresUI() {
     scoresEl.textContent = `O: ${oScore}\nX: ${xScore}`;
     return;
   }
+  if (modeChosen === MODE_HUMAN_VS_BOT) {
+    scoresEl.textContent = `Human (O): ${oScore}\nWhiskBot (X): ${xScore}`;
+    return;
+  }
 
   const oName = playerName('O', 'Player 1');
   const xName = playerName('X', 'Player 2');
   scoresEl.textContent = `${oName} (O): ${oScore}\n${xName} (X): ${xScore}`;
+}
+
+function updatePreJoinSetupNotice() {
+  if (myMark) return;
+  const mode = instructionsMode();
+  if (!mode || mode === MODE_HUMAN_VS_BOT) {
+    if (setupNoticeEl) setupNoticeEl.textContent = '';
+    return;
+  }
+  setStatusMessage('Enter your name then click Join.');
+}
+
+function updateNameInputVisibility() {
+  if (myMark || !nameRow) return;
+  const mode = instructionsMode();
+  nameRow.classList.toggle('hidden', mode === MODE_HUMAN_VS_BOT);
 }
 
 function setStatusMessage(text) {
@@ -353,26 +376,49 @@ function rowLengthFromScore(addedScore) {
   return 3;
 }
 
-function showScoreFlash(mark, addedScore) {
-  if (addedScore <= 0) return;
-  const signature = `${mark}:${addedScore}`;
+function scoreFlashActor(mark) {
+  if (modeChosen === MODE_HUMAN_VS_BOT) {
+    return mark === 'O' ? 'Human' : 'WhiskBot';
+  }
+  if (modeChosen === MODE_LOCAL) return mark;
+  return mark === myMark ? 'You' : playerName(mark, mark === 'O' ? 'Player 1' : 'Player 2');
+}
+
+function scoreFlashLine(mark, addedScore) {
+  const actor = scoreFlashActor(mark);
+  const getVerb = actor === 'You' ? 'get' : 'gets';
+  const scoreVerb = actor === 'You' ? 'score' : 'scores';
+  if (addedScore === 2) {
+    return `${actor} ${getVerb} 3 in a row two different ways and ${scoreVerb} 2 points!`;
+  }
+  const rowLen = rowLengthFromScore(addedScore);
+  const pointWord = addedScore === 1 ? 'point' : 'points';
+  return `${actor} ${getVerb} ${rowLen} in a row and ${scoreVerb} ${addedScore} ${pointWord}!`;
+}
+
+function showScoreFlashBatch(entries) {
+  const validEntries = Array.isArray(entries)
+    ? entries.filter((entry) => entry && (entry.mark === 'O' || entry.mark === 'X') && entry.added > 0)
+    : [];
+  if (validEntries.length === 0) return;
+  const signature = validEntries
+    .map((entry) => `${entry.mark}:${entry.added}`)
+    .sort()
+    .join('|');
   const now = Date.now();
   if (isScoreFlashActive && signature === lastScoreFlashSignature && now < scoreFlashExpiresAt) {
     return;
   }
 
-  const cls = mark === 'O' ? 'msg-player-o' : 'msg-player-x';
-  let flashText;
-  if (addedScore === 2) {
-    flashText = 'You got 3 in a row two different ways! You scored 2 points!';
-  } else {
-    const rowLen = rowLengthFromScore(addedScore);
-    const pointWord = addedScore === 1 ? 'point' : 'points';
-    flashText = `You got ${rowLen} in a row! You scored ${addedScore} ${pointWord}!`;
-  }
+  const flashHtml = validEntries
+    .map((entry) => {
+      const cls = entry.mark === 'O' ? 'msg-player-o' : 'msg-player-x';
+      return `<span class="${cls}">${escapeHtml(scoreFlashLine(entry.mark, entry.added))}</span>`;
+    })
+    .join('<br>');
   isScoreFlashActive = true;
   lastScoreFlashSignature = signature;
-  setStatusHtml(`<span class="${cls}">${flashText}</span>`);
+  setStatusHtml(flashHtml);
   scoreFlashExpiresAt = Date.now() + 3000;
   if (scoreFlashTimer) {
     window.clearTimeout(scoreFlashTimer);
@@ -384,8 +430,22 @@ function showScoreFlash(mark, addedScore) {
   }, 3000);
 }
 
+function showScoreFlash(mark, addedScore) {
+  showScoreFlashBatch([{ mark, added: addedScore }]);
+}
+
 function maybeShowScoreFlashFromState(prevScores, nextScores) {
   if (!myMark || !nextScores) return;
+
+  if (modeChosen === MODE_HUMAN_VS_BOT) {
+    const addedO = (nextScores.O ?? 0) - (prevScores.O ?? 0);
+    const addedX = (nextScores.X ?? 0) - (prevScores.X ?? 0);
+    const entries = [];
+    if (addedO > 0) entries.push({ mark: 'O', added: addedO });
+    if (addedX > 0) entries.push({ mark: 'X', added: addedX });
+    if (entries.length > 0) showScoreFlashBatch(entries);
+    return;
+  }
 
   if (modeChosen === MODE_LOCAL) {
     const addedO = (nextScores.O ?? 0) - (prevScores.O ?? 0);
@@ -632,6 +692,8 @@ function setMode(mode) {
     selectedJoinMode = mode;
     lobbyMode = mode;
     updateJoinButtonState();
+    updateNameInputVisibility();
+    updatePreJoinSetupNotice();
     if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === MODE_LOCAL);
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === MODE_REMOTE);
     if (humanVsBotBtn) humanVsBotBtn.classList.toggle('mode-btn-selected', mode === MODE_HUMAN_VS_BOT);
@@ -652,9 +714,11 @@ function setMode(mode) {
 }
 
 function join(mode = null) {
-  const name = (nameInput.value || '').trim() || 'Player';
-  const payload = { type: 'join', name, mode };
-  if (mode === MODE_HUMAN_VS_BOT && Number.isFinite(botSeed)) {
+  const normalizedMode = mode === 'bot' ? MODE_HUMAN_VS_BOT : mode;
+  const fallbackName = normalizedMode === MODE_HUMAN_VS_BOT ? 'Human' : 'Player';
+  const name = (nameInput.value || '').trim() || fallbackName;
+  const payload = { type: 'join', name, mode: normalizedMode };
+  if (normalizedMode === MODE_HUMAN_VS_BOT && Number.isFinite(botSeed)) {
     payload.bot_seed = Math.trunc(botSeed);
   }
   send(payload);
@@ -668,6 +732,7 @@ function updatePreJoinUiFromLobby() {
     if (modePicker) modePicker.classList.add('hidden');
     if (modeLabel) modeLabel.classList.add('hidden');
     selectedJoinMode = lobbyMode || selectedJoinMode;
+    updateNameInputVisibility();
     updateJoinButtonState();
     if (lobbyMode === MODE_LOCAL) {
       setStatusMessage(`${lobbyHostName} is playing Whisk in local mode so you can't join at this time. But you are welcome to play in local mode. Just enter your name and click "Join".`);
@@ -679,10 +744,9 @@ function updatePreJoinUiFromLobby() {
   } else {
     if (modePicker) modePicker.classList.remove('hidden');
     if (modeLabel) modeLabel.classList.remove('hidden');
-    if (!selectedJoinMode) {
-      joinBtn.disabled = true;
-      setStatusMessage('Enter your name, choose a mode, then click Join.');
-    }
+    updateNameInputVisibility();
+    updateJoinButtonState();
+    updatePreJoinSetupNotice();
   }
   updateInstructionsButtonState();
 }
@@ -803,6 +867,7 @@ function handleMessage(msg) {
       break;
 
     case 'score_event':
+      if (modeChosen === MODE_HUMAN_VS_BOT) break;
       if (msg && typeof msg.mark === 'string' && typeof msg.added === 'number') {
         showScoreFlash(msg.mark, msg.added);
       }
@@ -841,9 +906,11 @@ function handleMessage(msg) {
       if (msg.message && msg.message.toLowerCase().includes('tie')) {
         showGameOverMedia('tie', "It's a tie!");
       } else if (msg.message && msg.message.includes('O wins')) {
-        showGameOverMedia('win', `${playerName('O', 'Player 1')} wins!`);
+        const winner = modeChosen === MODE_HUMAN_VS_BOT ? 'Human' : playerName('O', 'Player 1');
+        showGameOverMedia('win', `${winner} wins!`);
       } else if (msg.message && msg.message.includes('X wins')) {
-        showGameOverMedia('win', `${playerName('X', 'Player 2')} wins!`);
+        const winner = modeChosen === MODE_HUMAN_VS_BOT ? 'WhiskBot' : playerName('X', 'Player 2');
+        showGameOverMedia('win', `${winner} wins!`);
       } else {
         setStatusMessage(msg.message || 'Game over!');
       }
