@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import math
 import os
 import random
@@ -15,7 +16,7 @@ from .encoding import ActionCodec, StateEncoder
 from .env import WhiskEnv
 from .mcts import MCTS
 from .model import WhiskPolicyValueModel
-from ..game import GameState, Mark
+from ..game import GameState, Mark, MAX_PIECES_PER_PLAYER, Piece, score_for_move
 
 Coord = Tuple[int, int]
 
@@ -47,9 +48,13 @@ class HumanVsAgentSession:
         self.rng = random.Random(seed)
         self.model: Optional[WhiskPolicyValueModel] = None
         self.greedy = GreedyScoreAgent()
+        self.live_mcts_simulations = self._env_int("WHISK_BOT_MCTS_SIMS", 24, min_value=8, max_value=256)
         self.stochastic_temperature = self._env_float("WHISK_BOT_TEMPERATURE", 0.18, min_value=0.01, max_value=2.0)
         self.stochastic_epsilon = self._env_float("WHISK_BOT_EPSILON", 0.05, min_value=0.0, max_value=0.5)
         self.stochastic_top_k = self._env_int("WHISK_BOT_TOP_K", 5, min_value=1, max_value=16)
+        self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 10, min_value=2, max_value=24)
+        self.pending_rollouts = self._env_int("WHISK_BOT_PENDING_ROLLOUTS", 3, min_value=0, max_value=16)
+        self.pending_rollout_turns = self._env_int("WHISK_BOT_PENDING_ROLLOUT_TURNS", 4, min_value=1, max_value=32)
         if checkpoint_path.exists():
             try:
                 self.model = WhiskPolicyValueModel.load(checkpoint_path)
@@ -79,7 +84,7 @@ class HumanVsAgentSession:
                 if state.pending[opponent] is not None:
                     return self._choose_pending_lookahead(env, bot_mark, legal_ids, obs)
 
-                mcts = MCTS(model=self.model, simulations=12, rollout_max_turns=80)
+                mcts = MCTS(model=self.model, simulations=self.live_mcts_simulations, rollout_max_turns=80)
                 pi = mcts.search(env, bot_mark, self.rng)
                 scores = {i: float(pi[i]) for i in legal_ids}
                 chosen_id = self._sample_action_from_scores(scores)
@@ -104,46 +109,177 @@ class HumanVsAgentSession:
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         priors, _ = self.model.predict(obs)
         scores: Dict[int, float] = {}
+        ordered = sorted(legal_ids, key=lambda i: priors[i], reverse=True)
+        candidate_ids = ordered[: min(len(ordered), self.pending_eval_top_k)]
 
-        for action_id in legal_ids:
-            action = ActionCodec.action_to_coord(action_id)
-            sim_env = env.clone()
-            try:
-                sim_env.reserve_move(bot_mark, action)
-                if not sim_env.ready_to_commit():
-                    continue
-                committed = sim_env.commit_pending_turn()
-            except Exception:
-                continue
-
-            next_obs = StateEncoder.encode_observation(sim_env.state, bot_mark)
-            _, next_value = self.model.predict(next_obs)
-
-            added_self = int(committed.added.get(bot_mark.value, 0))
-            added_opp = int(committed.added.get(opponent.value, 0))
-            prior = float(priors[action_id])
-
-            terminal_bonus = 0.0
-            if committed.done:
-                if committed.winner == bot_mark.value:
-                    terminal_bonus = 1.0
-                elif committed.winner == opponent.value:
-                    terminal_bonus = -1.0
-
-            # Blend immediate scoring swing with post-commit model value.
-            utility = (
-                (1.5 * float(next_value))
-                + (0.35 * float(added_self - added_opp))
-                + (0.20 * prior)
-                + (0.60 * terminal_bonus)
+        for action_id in candidate_ids:
+            scores[action_id] = self._pending_action_utility(
+                env=env,
+                bot_mark=bot_mark,
+                opponent=opponent,
+                action_id=action_id,
+                prior=float(priors[action_id]),
             )
-            scores[action_id] = utility
 
         if not scores:
             scores = {i: float(priors[i]) for i in legal_ids}
+        elif len(scores) == 1:
+            # Keep at least two actions in consideration to avoid fully rigid replies.
+            for action_id in ordered:
+                if action_id not in scores:
+                    scores[action_id] = float(priors[action_id])
+                    break
 
         chosen_id = self._sample_action_from_scores(scores)
         return self._build_decision(chosen_id, "model_lookahead", scores)
+
+    def _pending_action_utility(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        action_id: int,
+        prior: float,
+    ) -> float:
+        assert self.model is not None
+        action = ActionCodec.action_to_coord(action_id)
+        sim_env = env.clone()
+        try:
+            sim_env.reserve_move(bot_mark, action)
+            if not sim_env.ready_to_commit():
+                return -1e9
+            committed = sim_env.commit_pending_turn()
+        except Exception:
+            return -1e9
+
+        next_obs = StateEncoder.encode_observation(sim_env.state, bot_mark)
+        _, next_value = self.model.predict(next_obs)
+
+        added_self = int(committed.added.get(bot_mark.value, 0))
+        added_opp = int(committed.added.get(opponent.value, 0))
+        immediate_delta = added_self - added_opp
+
+        terminal_bonus = 0.0
+        if committed.done:
+            if committed.winner == bot_mark.value:
+                terminal_bonus = 1.0
+            elif committed.winner == opponent.value:
+                terminal_bonus = -1.0
+
+        # Tactical terms: can we threaten points next turn, and can opponent?
+        bot_threat = self._max_immediate_score(sim_env, bot_mark)
+        opp_threat = self._max_immediate_score(sim_env, opponent)
+        bot_threat_norm = min(9, bot_threat) / 9.0
+        opp_threat_norm = min(9, opp_threat) / 9.0
+
+        rollout_value = self._rollout_value(sim_env, bot_mark)
+
+        return (
+            (1.25 * float(next_value))
+            + (0.45 * float(immediate_delta))
+            + (0.35 * rollout_value)
+            + (0.20 * prior)
+            + (0.12 * bot_threat_norm)
+            - (0.20 * opp_threat_norm)
+            + (0.75 * terminal_bonus)
+        )
+
+    def _rollout_value(self, env: WhiskEnv, bot_mark: Mark) -> float:
+        if self.pending_rollouts <= 0:
+            return self._value_from_scores(env.state, bot_mark)
+
+        values: List[float] = []
+        for _ in range(self.pending_rollouts):
+            sim_env = env.clone()
+            for _ in range(self.pending_rollout_turns):
+                if sim_env.is_terminal():
+                    break
+                a_o = self._sample_model_action(sim_env, Mark.O)
+                a_x = self._sample_model_action(sim_env, Mark.X)
+                if a_o is None or a_x is None:
+                    break
+                if a_o == a_x:
+                    # Only second mover reroutes on collision.
+                    first_mark = self.rng.choice([Mark.O, Mark.X])
+                    if first_mark == Mark.O:
+                        a_x = self._sample_model_action(sim_env, Mark.X, forbid=a_o)
+                    else:
+                        a_o = self._sample_model_action(sim_env, Mark.O, forbid=a_x)
+                    if a_o is None or a_x is None:
+                        break
+                sim_env.step_joint(a_o, a_x)
+
+            values.append(self._value_from_scores(sim_env.state, bot_mark))
+
+        if not values:
+            return self._value_from_scores(env.state, bot_mark)
+        return sum(values) / len(values)
+
+    def _sample_model_action(
+        self,
+        env: WhiskEnv,
+        mark: Mark,
+        forbid: Coord | None = None,
+    ) -> Coord | None:
+        legal = env.legal_actions(mark)
+        if forbid is not None:
+            legal = [coord for coord in legal if coord != forbid]
+        if not legal:
+            return None
+
+        if self.model is None:
+            return self.rng.choice(legal)
+
+        obs = StateEncoder.encode_observation(env.state, mark)
+        priors, _ = self.model.predict(obs)
+        legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
+        weights = [max(0.0, float(priors[action_id])) for action_id in legal_ids]
+        total = sum(weights)
+        if total <= 0:
+            return self.rng.choice(legal)
+
+        r = self.rng.random() * total
+        acc = 0.0
+        for coord, weight in zip(legal, weights):
+            acc += weight
+            if acc >= r:
+                return coord
+        return legal[-1]
+
+    def _max_immediate_score(self, env: WhiskEnv, mark: Mark) -> int:
+        legal = env.legal_actions(mark)
+        if not legal:
+            return 0
+        return max(self._immediate_move_score(env, mark, coord) for coord in legal)
+
+    @staticmethod
+    def _immediate_move_score(env: WhiskEnv, mark: Mark, action: Coord) -> int:
+        state = deepcopy(env.state)
+        row, col = action
+
+        pieces = {
+            Mark.O: deque(state.pieces[Mark.O]),
+            Mark.X: deque(state.pieces[Mark.X]),
+        }
+
+        pieces[mark].append(Piece(mark=mark, row=row, col=col, turn_placed=state.turn + 1))
+        while len(pieces[mark]) > MAX_PIECES_PER_PLAYER:
+            pieces[mark].popleft()
+
+        occ = {}
+        for piece_mark, dq in pieces.items():
+            for piece in dq:
+                occ[(piece.row, piece.col)] = piece_mark
+
+        return score_for_move(occ, mark, action)
+
+    @staticmethod
+    def _value_from_scores(state: GameState, mark: Mark) -> float:
+        diff = state.scores[Mark.O] - state.scores[Mark.X]
+        if mark == Mark.X:
+            diff = -diff
+        value = diff / 50.0
+        return max(-1.0, min(1.0, value))
 
     def _build_decision(self, chosen_id: int, source: str, scores: Dict[int, float]) -> BotDecision:
         chosen_row, chosen_col = ActionCodec.action_to_coord(chosen_id)

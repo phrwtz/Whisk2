@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--promotion-threshold", type=float, default=0.55)
     parser.add_argument("--replay-capacity", type=int, default=20000)
     parser.add_argument("--replay-sample-size", type=int, default=4000)
+    parser.add_argument("--train-passes", type=int, default=2)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--quiet", action="store_true", help="Disable periodic progress logs")
     parser.add_argument("--seed", type=int, default=0)
@@ -50,6 +51,7 @@ def main() -> None:
         promotion_threshold=args.promotion_threshold,
         replay_capacity=args.replay_capacity,
         replay_sample_size=args.replay_sample_size,
+        train_passes=args.train_passes,
         seed=args.seed,
         resume=args.resume,
         progress=not args.quiet,

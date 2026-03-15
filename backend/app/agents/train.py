@@ -43,6 +43,7 @@ class TrainConfig:
     promotion_threshold: float = 0.55
     replay_capacity: int = 20000
     replay_sample_size: int = 4000
+    train_passes: int = 2
     seed: int = 0
     resume: bool = False
     progress: bool = False
@@ -89,6 +90,8 @@ class Trainer:
             raise ValueError("iterations must be > 0")
         if self.config.promotion_games <= 0:
             raise ValueError("promotion_games must be > 0")
+        if self.config.train_passes <= 0:
+            raise ValueError("train_passes must be > 0")
 
         manager = CheckpointManager(checkpoint_path.parent)
         replay_path = replay_path or (checkpoint_path.parent / "replay_buffer.pkl")
@@ -159,9 +162,16 @@ class Trainer:
 
             # Train candidate from best using replay sample.
             candidate_model = self.best_model.copy()
-            train_batch = replay.sample(min(self.config.replay_sample_size, len(replay.items)), seed=gen_seed)
+            sample_size = min(self.config.replay_sample_size, len(replay.items))
+            train_batch = replay.sample(sample_size, seed=gen_seed)
             if train_batch:
                 candidate_model.train_on_examples(train_batch)
+                for pass_idx in range(1, self.config.train_passes):
+                    resample_seed = gen_seed + (pass_idx * 7_919)
+                    pass_batch = replay.sample(sample_size, seed=resample_seed)
+                    if not pass_batch:
+                        break
+                    candidate_model.train_on_examples(pass_batch)
 
             head_to_head = self.evaluate_candidate_vs_best(
                 candidate_model,
