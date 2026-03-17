@@ -74,11 +74,26 @@ class HumanVsAgentSession:
         if not legal:
             raise RuntimeError("Bot has no legal actions")
 
+        opponent = Mark.X if bot_mark == Mark.O else Mark.O
+        legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
+        threat_blockers = self._imminent_five_blockers(env, opponent, legal_ids)
+        if threat_blockers:
+            scores = {action_id: 0.0 for action_id in threat_blockers}
+            if self.model is not None:
+                obs = StateEncoder.encode_observation(env.state, bot_mark)
+                priors, _ = self.model.predict(obs)
+                for action_id in threat_blockers:
+                    scores[action_id] = float(priors[action_id])
+            for action_id in threat_blockers:
+                coord = ActionCodec.action_to_coord(action_id)
+                scores[action_id] += 0.03 * self._immediate_move_score(env, bot_mark, coord)
+            chosen_id = max(scores, key=scores.get)
+            return self._build_decision(chosen_id, "threat_block", scores)
+
         if self.model is not None:
             obs = StateEncoder.encode_observation(env.state, bot_mark)
             legal_ids = [i for i, bit in enumerate(obs["legal_action_mask"]) if bit]
             if legal_ids:
-                opponent = Mark.X if bot_mark == Mark.O else Mark.O
                 # In Human-vs-Bot mode, the human's pending move is known at this point.
                 # Evaluate each legal bot response by committing the pending turn.
                 if state.pending[opponent] is not None:
@@ -338,6 +353,21 @@ class HumanVsAgentSession:
         except (TypeError, ValueError):
             return default
         return max(min_value, min(max_value, value))
+
+    def _imminent_five_blockers(
+        self,
+        env: WhiskEnv,
+        opponent: Mark,
+        legal_ids: List[int],
+    ) -> List[int]:
+        threats = {
+            coord
+            for coord in env.legal_actions(opponent)
+            if self._immediate_move_score(env, opponent, coord) >= 9
+        }
+        if not threats:
+            return []
+        return [action_id for action_id in legal_ids if ActionCodec.action_to_coord(action_id) in threats]
 
     @staticmethod
     def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
