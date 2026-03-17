@@ -55,6 +55,9 @@ class HumanVsAgentSession:
         self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 10, min_value=2, max_value=24)
         self.pending_rollouts = self._env_int("WHISK_BOT_PENDING_ROLLOUTS", 3, min_value=0, max_value=16)
         self.pending_rollout_turns = self._env_int("WHISK_BOT_PENDING_ROLLOUT_TURNS", 4, min_value=1, max_value=32)
+        self.opening_tactical_enabled = bool(
+            self._env_int("WHISK_BOT_OPENING_TACTICAL", 1, min_value=0, max_value=1)
+        )
         if checkpoint_path.exists():
             try:
                 self.model = WhiskPolicyValueModel.load(checkpoint_path)
@@ -87,6 +90,11 @@ class HumanVsAgentSession:
             chosen_id = max(scores, key=scores.get)
             return self._build_decision(chosen_id, "must_block", scores)
 
+        if self.opening_tactical_enabled and state.pending[opponent] is None and self._is_opening_phase(state):
+            opening_decision = self._choose_opening_tactical(env, bot_mark, opponent, legal_ids)
+            if opening_decision is not None:
+                return opening_decision
+
         if self.model is not None:
             obs = StateEncoder.encode_observation(env.state, bot_mark)
             legal_ids = [i for i, bit in enumerate(obs["legal_action_mask"]) if bit]
@@ -109,6 +117,61 @@ class HumanVsAgentSession:
             source="greedy",
             candidates=[BotCandidate(row=row, col=col, score=1.0)],
         )
+
+    def _choose_opening_tactical(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        legal_ids: List[int],
+    ) -> BotDecision | None:
+        scores: Dict[int, float] = {}
+        priors: List[float] | None = None
+        if self.model is not None:
+            obs = StateEncoder.encode_observation(env.state, bot_mark)
+            priors, _ = self.model.predict(obs)
+
+        for action_id in legal_ids:
+            action = ActionCodec.action_to_coord(action_id)
+            sim_env = env.clone()
+            try:
+                sim_env.reserve_move(bot_mark, action)
+            except Exception:
+                continue
+
+            opp_best = self._max_immediate_score(sim_env, opponent)
+            bot_best = self._max_immediate_score(sim_env, bot_mark)
+            own_now = self._immediate_move_score(env, bot_mark, action)
+            center = self._center_bias(action)
+            prior = float(priors[action_id]) if priors is not None else 0.0
+
+            opp_norm = min(9, opp_best) / 9.0
+            bot_norm = min(9, bot_best) / 9.0
+            own_norm = min(9, own_now) / 9.0
+
+            score = (
+                (0.55 * bot_norm)
+                + (0.30 * own_norm)
+                + (0.15 * prior)
+                + (0.05 * center)
+                - (0.95 * opp_norm)
+            )
+            if opp_best >= 9:
+                score -= 1.5
+            elif opp_best >= 4:
+                score -= 0.6
+            elif opp_best >= 1:
+                score -= 0.2
+            if bot_best >= 9:
+                score += 0.9
+            elif bot_best >= 4:
+                score += 0.35
+            scores[action_id] = score
+
+        if not scores:
+            return None
+        chosen_id = max(scores, key=scores.get)
+        return self._build_decision(chosen_id, "opening_tactical", scores)
 
     def _choose_pending_lookahead(
         self,
@@ -372,6 +435,19 @@ class HumanVsAgentSession:
         if not threats:
             return []
         return [action_id for action_id in legal_ids if ActionCodec.action_to_coord(action_id) in threats]
+
+    @staticmethod
+    def _is_opening_phase(state: GameState) -> bool:
+        return (
+            len(state.pieces[Mark.O]) < MAX_PIECES_PER_PLAYER
+            and len(state.pieces[Mark.X]) < MAX_PIECES_PER_PLAYER
+        )
+
+    @staticmethod
+    def _center_bias(action: Coord) -> float:
+        row, col = action
+        # Normalize to roughly [-1, 0], higher is better (near center).
+        return -(((row - 3.5) ** 2 + (col - 3.5) ** 2) / 24.5)
 
     def _must_block_imminent_five_ids(
         self,

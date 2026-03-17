@@ -602,7 +602,7 @@ def test_bot_mode_sends_explanation_event():
         msgs = _recv_until_type(ws, "turn_committed")
         explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
         assert explanation is not None
-        assert explanation["source"] in ("must_block", "model_lookahead", "model_prior", "mcts", "greedy")
+        assert explanation["source"] in ("must_block", "opening_tactical", "model_lookahead", "model_prior", "mcts", "greedy")
         assert "chosen" in explanation and "row" in explanation["chosen"] and "col" in explanation["chosen"]
         assert isinstance(explanation.get("candidates"), list)
 
@@ -692,3 +692,17 @@ def test_human_adapter_must_blocks_single_imminent_five_threat(tmp_path: Path):
 
     assert (decision.row, decision.col) == (0, 4)
     assert decision.source == "must_block"
+
+
+def test_human_adapter_opening_tactical_blocks_high_value_extension(tmp_path: Path):
+    # Human O has three in a row; strongest immediate extension is at (0,3).
+    state = GameState()
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=1)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 3)
+    assert decision.source in ("opening_tactical", "must_block")
