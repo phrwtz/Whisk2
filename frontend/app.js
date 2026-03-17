@@ -893,17 +893,13 @@ function handleMessage(msg) {
       break;
 
     case 'bot_explanation':
-      if (modeChosen === MODE_HUMAN_VS_BOT && Date.now() >= scoreFlashExpiresAt) {
+      if (modeChosen === MODE_HUMAN_VS_BOT) {
         const text = formatBotExplanation(msg);
-        const entry = {
-          turn: Number.isFinite(msg?.turn) ? msg.turn : 0,
-          source: msg?.source || 'bot',
-          text,
-        };
-        botAnalysisHistory.unshift(entry);
-        if (botAnalysisHistory.length > 8) botAnalysisHistory = botAnalysisHistory.slice(0, 8);
-        renderBotAnalysisPanel();
-        setStatusMessage(text);
+        const turn = Number.isFinite(msg?.turn) ? msg.turn : '?';
+        const source = msg?.source || 'bot';
+        if (typeof console !== 'undefined' && typeof console.info === 'function') {
+          console.info(`[WhiskBot] turn=${turn} source=${source} ${text}`);
+        }
       }
       break;
 
