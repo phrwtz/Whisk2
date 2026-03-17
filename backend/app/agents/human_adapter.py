@@ -76,19 +76,16 @@ class HumanVsAgentSession:
 
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
-        threat_blockers = self._imminent_five_blockers(env, opponent, legal_ids)
-        if threat_blockers:
-            scores = {action_id: 0.0 for action_id in threat_blockers}
+        must_block_ids = self._must_block_imminent_five_ids(env, bot_mark, opponent, legal_ids)
+        if must_block_ids:
+            scores = {action_id: 0.0 for action_id in must_block_ids}
             if self.model is not None:
                 obs = StateEncoder.encode_observation(env.state, bot_mark)
                 priors, _ = self.model.predict(obs)
-                for action_id in threat_blockers:
+                for action_id in must_block_ids:
                     scores[action_id] = float(priors[action_id])
-            for action_id in threat_blockers:
-                coord = ActionCodec.action_to_coord(action_id)
-                scores[action_id] += 0.03 * self._immediate_move_score(env, bot_mark, coord)
             chosen_id = max(scores, key=scores.get)
-            return self._build_decision(chosen_id, "threat_block", scores)
+            return self._build_decision(chosen_id, "must_block", scores)
 
         if self.model is not None:
             obs = StateEncoder.encode_observation(env.state, bot_mark)
@@ -186,6 +183,7 @@ class HumanVsAgentSession:
         opp_threat = self._max_immediate_score(sim_env, opponent)
         bot_threat_norm = min(9, bot_threat) / 9.0
         opp_threat_norm = min(9, opp_threat) / 9.0
+        minimax_margin = self._one_turn_minimax_margin(sim_env, bot_mark, opponent)
 
         rollout_value = self._rollout_value(sim_env, bot_mark)
 
@@ -193,6 +191,7 @@ class HumanVsAgentSession:
             (1.25 * float(next_value))
             + (0.45 * float(immediate_delta))
             + (0.35 * rollout_value)
+            + (0.30 * minimax_margin)
             + (0.20 * prior)
             + (0.12 * bot_threat_norm)
             - (0.20 * opp_threat_norm)
@@ -266,6 +265,11 @@ class HumanVsAgentSession:
         if not legal:
             return 0
         return max(self._immediate_move_score(env, mark, coord) for coord in legal)
+
+    def _one_turn_minimax_margin(self, env: WhiskEnv, bot_mark: Mark, opponent: Mark) -> float:
+        bot_best = self._max_immediate_score(env, bot_mark)
+        opp_best = self._max_immediate_score(env, opponent)
+        return (min(9, bot_best) - min(9, opp_best)) / 9.0
 
     @staticmethod
     def _immediate_move_score(env: WhiskEnv, mark: Mark, action: Coord) -> int:
@@ -368,6 +372,32 @@ class HumanVsAgentSession:
         if not threats:
             return []
         return [action_id for action_id in legal_ids if ActionCodec.action_to_coord(action_id) in threats]
+
+    def _must_block_imminent_five_ids(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        legal_ids: List[int],
+    ) -> List[int]:
+        opponent_threat_blocks = self._imminent_five_blockers(env, opponent, legal_ids)
+        if not opponent_threat_blocks:
+            return []
+
+        # "Truly forced" only when there is exactly one lethal threat square.
+        threat_coords = {
+            ActionCodec.action_to_coord(action_id)
+            for action_id in opponent_threat_blocks
+        }
+        if len(threat_coords) != 1:
+            return []
+
+        # If we have our own immediate 5-point threat, don't force a defensive block.
+        own_winning_actions = self._imminent_five_blockers(env, bot_mark, legal_ids)
+        if own_winning_actions:
+            return []
+
+        return opponent_threat_blocks
 
     @staticmethod
     def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:

@@ -602,7 +602,7 @@ def test_bot_mode_sends_explanation_event():
         msgs = _recv_until_type(ws, "turn_committed")
         explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
         assert explanation is not None
-        assert explanation["source"] in ("threat_block", "model_lookahead", "model_prior", "mcts", "greedy")
+        assert explanation["source"] in ("must_block", "model_lookahead", "model_prior", "mcts", "greedy")
         assert "chosen" in explanation and "row" in explanation["chosen"] and "col" in explanation["chosen"]
         assert isinstance(explanation.get("candidates"), list)
 
@@ -663,21 +663,6 @@ def test_bot_mode_loads_promoted_release_artifact_end_to_end(tmp_path: Path, mon
     monkeypatch.setenv("WHISK_BOT_CHECKPOINT", str(promoted_ckpt))
 
     manager.reset()
-
-
-def test_human_adapter_hard_blocks_imminent_five_threat(tmp_path: Path):
-    # Human O has four in a row with one open endpoint at (0,4).
-    state = GameState()
-    for i, col in enumerate((0, 1, 2, 3), start=1):
-        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
-
-    # Force fallback behavior (no model loaded); guardrail should still apply.
-    missing_ckpt = tmp_path / "missing_model.pkl"
-    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=1)
-    decision = bot.choose_decision(state, Mark.X)
-
-    assert (decision.row, decision.col) == (0, 4)
-    assert decision.source == "threat_block"
     client = TestClient(app)
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot", "bot_seed": 7})
@@ -692,3 +677,18 @@ def test_human_adapter_hard_blocks_imminent_five_threat(tmp_path: Path):
         assert explanation["source"] in ("model_lookahead", "model_prior")
 
     manager.reset()
+
+
+def test_human_adapter_must_blocks_single_imminent_five_threat(tmp_path: Path):
+    # Human O has four in a row with one open endpoint at (0,4).
+    state = GameState()
+    for i, col in enumerate((0, 1, 2, 3), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+
+    # Force fallback behavior (no model loaded); must-block guardrail should apply.
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=1)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 4)
+    assert decision.source == "must_block"
