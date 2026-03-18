@@ -120,6 +120,8 @@ const TIE_VIDEO_URL = '/static/media/Tie!.mp4';
 function updateJoinButtonState() {
   if (!joinBtn) return;
   const activeMode = instructionsMode();
+  const showJoin = !!activeMode && activeMode !== MODE_HUMAN_VS_BOT;
+  joinBtn.classList.toggle('hidden', !showJoin);
   let hasName = false;
   if (activeMode === MODE_HUMAN_VS_BOT) {
     hasName = true;
@@ -139,11 +141,10 @@ function instructionsMode() {
 }
 
 function updateInstructionsButtonState() {
-  const activeMode = instructionsMode();
-  const preJoinActive = !myMark && !!activeMode;
+  const preJoinActive = !myMark;
   if (instructionsBtnSetup) {
     instructionsBtnSetup.classList.toggle('hidden', !preJoinActive);
-    instructionsBtnSetup.disabled = !preJoinActive;
+    instructionsBtnSetup.disabled = false;
   }
 
   const inGameActive = !!(myMark && modeChosen);
@@ -234,13 +235,12 @@ function updatePreJoinSetupNotice() {
 function updatePreJoinSetupLayout() {
   if (myMark) return;
   const mode = instructionsMode();
-  const hasMode = !!mode;
-  if (setupActionsEl) setupActionsEl.classList.toggle('hidden', !hasMode);
+  if (setupActionsEl) setupActionsEl.classList.remove('hidden');
   if (nameLabel) {
     nameLabel.textContent = mode === MODE_LOCAL ? 'Name for O' : 'Your name';
   }
-  if (nameRow) nameRow.classList.toggle('hidden', !hasMode || mode === MODE_HUMAN_VS_BOT);
-  if (nameRowX) nameRowX.classList.toggle('hidden', !hasMode || mode !== MODE_LOCAL);
+  if (nameRow) nameRow.classList.toggle('hidden', !mode || mode === MODE_HUMAN_VS_BOT);
+  if (nameRowX) nameRowX.classList.toggle('hidden', !mode || mode !== MODE_LOCAL);
 }
 
 function setStatusMessage(text) {
@@ -265,7 +265,18 @@ function setStatusHtml(html) {
 function openInstructionsModal() {
   if (!instructionsModalEl || !instructionsTitleEl || !instructionsBodyEl) return;
   const activeMode = instructionsMode();
-  if (!activeMode) return;
+  if (!activeMode) {
+    instructionsTitleEl.textContent = 'Whisk Instructions';
+    const lines = [
+      'Choose a mode to start playing Whisk.',
+      'You score 1 point for 3 in a row, 4 points for 4 in a row, and 9 points for 5 in a row.',
+      'Each player can keep only 5 marks on the board; the oldest mark disappears when a 6th is placed.',
+      'First player to 50 points wins.',
+    ];
+    instructionsBodyEl.innerHTML = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+    instructionsModalEl.classList.remove('hidden');
+    return;
+  }
   const isLocal = activeMode === MODE_LOCAL;
   const isHumanVsBot = activeMode === MODE_HUMAN_VS_BOT;
   const lines = isLocal
@@ -764,6 +775,9 @@ function setMode(mode) {
     if (localBtn) localBtn.classList.toggle('mode-btn-selected', mode === MODE_LOCAL);
     if (remoteBtn) remoteBtn.classList.toggle('mode-btn-selected', mode === MODE_REMOTE);
     if (humanVsBotBtn) humanVsBotBtn.classList.toggle('mode-btn-selected', mode === MODE_HUMAN_VS_BOT);
+    if (mode === MODE_HUMAN_VS_BOT) {
+      join(MODE_HUMAN_VS_BOT);
+    }
     return;
   }
 
@@ -1131,6 +1145,8 @@ if (instructionsModalEl) {
 // Init
 createBoard();
 updateModePanels();
+updatePreJoinSetupLayout();
+updatePreJoinSetupNotice();
 updateJoinButtonState();
 updateInstructionsButtonState();
 renderBotAnalysisPanel();
