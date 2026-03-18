@@ -331,6 +331,7 @@ class HumanVsAgentSession:
 
         if not scores:
             return None
+        scores = self._apply_pending_immediate_five_safety_filter(env, bot_mark, scores)
         chosen_id = max(scores, key=scores.get)
         # Keep source stable for frontend handling.
         return self._build_decision(chosen_id, "opening_tactical", scores)
@@ -367,8 +368,60 @@ class HumanVsAgentSession:
                     scores[action_id] = float(priors[action_id])
                     break
 
+        scores = self._apply_pending_immediate_five_safety_filter(env, bot_mark, scores)
         chosen_id = self._sample_action_from_scores(scores)
         return self._build_decision(chosen_id, "model_lookahead", scores)
+
+    def _apply_pending_immediate_five_safety_filter(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        scores: Dict[int, float],
+    ) -> Dict[int, float]:
+        if not scores:
+            return scores
+        opponent = Mark.X if bot_mark == Mark.O else Mark.O
+        if env.state.pending[opponent] is None:
+            return scores
+
+        risk_by_action: Dict[int, int] = {}
+        has_immediate_five_risk = False
+        has_safe_alternative = False
+        for action_id in scores:
+            threat = self._opponent_next_turn_max_after_pending_reply(env, bot_mark, action_id)
+            risk_by_action[action_id] = threat
+            if threat >= 9:
+                has_immediate_five_risk = True
+            else:
+                has_safe_alternative = True
+
+        if not (has_immediate_five_risk and has_safe_alternative):
+            return scores
+
+        filtered = {
+            action_id: score
+            for action_id, score in scores.items()
+            if risk_by_action.get(action_id, 9) < 9
+        }
+        return filtered or scores
+
+    def _opponent_next_turn_max_after_pending_reply(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        action_id: int,
+    ) -> int:
+        opponent = Mark.X if bot_mark == Mark.O else Mark.O
+        action = ActionCodec.action_to_coord(action_id)
+        sim_env = env.clone()
+        try:
+            sim_env.reserve_move(bot_mark, action)
+            if not sim_env.ready_to_commit():
+                return 9
+            sim_env.commit_pending_turn()
+        except Exception:
+            return 9
+        return self._max_immediate_score(sim_env, opponent)
 
     def _pending_action_utility(
         self,

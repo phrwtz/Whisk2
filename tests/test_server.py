@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.app.agents.deploy import promote_release_artifact
+from backend.app.agents.encoding import ActionCodec
 from backend.app.agents.human_adapter import HumanVsAgentSession
 from backend.app.agents.model import WhiskPolicyValueModel
 from backend.app.game import GameState, Mark, Piece, apply_move, commit_turn
@@ -724,3 +725,31 @@ def test_human_adapter_pending_reply_blocks_imminent_five_threat(tmp_path: Path)
 
     assert (decision.row, decision.col) == (0, 4)
     assert decision.source in ("must_block", "opening_tactical")
+
+
+def test_pending_safety_filter_drops_immediate_five_blunders(tmp_path: Path):
+    # O has a pending extension at (0,3). If X plays elsewhere now, O can take (0,4)
+    # next turn for an immediate 5-in-a-row threat. The safety filter should remove
+    # those blundering options when a safe reply exists.
+    state = GameState()
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+    apply_move(state, Mark.O, 0, 3)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=7)
+
+    from backend.app.agents.env import WhiskEnv  # local import keeps top-level imports stable
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+    safe_id = ActionCodec.coord_to_action(0, 4)   # blocks O's row
+    risky_id = ActionCodec.coord_to_action(7, 7)  # does not block
+    filtered = bot._apply_pending_immediate_five_safety_filter(
+        env=env,
+        bot_mark=Mark.X,
+        scores={safe_id: -1.0, risky_id: 10.0},
+    )
+
+    assert safe_id in filtered
+    assert risky_id not in filtered
