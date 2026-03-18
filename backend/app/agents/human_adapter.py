@@ -6,6 +6,7 @@ from collections import deque
 import math
 import os
 import random
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +71,9 @@ class HumanVsAgentSession:
         self.opening_two_ply_weight = self._env_float(
             "WHISK_BOT_OPENING_2PLY_WEIGHT", 0.45, min_value=0.0, max_value=2.0
         )
+        self.move_time_limit_sec = self._env_float(
+            "WHISK_BOT_MOVE_TIME_LIMIT_SEC", 10.0, min_value=0.2, max_value=60.0
+        )
         if checkpoint_path.exists():
             try:
                 self.model = WhiskPolicyValueModel.load(checkpoint_path)
@@ -82,6 +86,7 @@ class HumanVsAgentSession:
 
     def choose_decision(self, state: GameState, bot_mark: Mark) -> BotDecision:
         """Choose a legal move for `bot_mark` from the current shared state."""
+        deadline = time.perf_counter() + self.move_time_limit_sec
         env = WhiskEnv(mode="remote")
         env.state = deepcopy(state)
 
@@ -91,7 +96,9 @@ class HumanVsAgentSession:
 
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
-        must_block_ids = self._must_block_imminent_five_ids(env, bot_mark, opponent, legal_ids)
+        must_block_ids = self._must_block_imminent_five_ids(
+            env, bot_mark, opponent, legal_ids, deadline=deadline
+        )
         if must_block_ids:
             scores = {action_id: 0.0 for action_id in must_block_ids}
             if self.model is not None:
@@ -103,12 +110,14 @@ class HumanVsAgentSession:
             return self._build_decision(chosen_id, "must_block", scores)
 
         if self.opening_tactical_enabled and state.pending[opponent] is None and self._is_opening_phase(state):
-            opening_decision = self._choose_opening_tactical(env, bot_mark, opponent, legal_ids)
+            opening_decision = self._choose_opening_tactical(
+                env, bot_mark, opponent, legal_ids, deadline=deadline
+            )
             if opening_decision is not None:
                 return opening_decision
 
         if state.pending[opponent] is not None and self.model is None:
-            pending_tactical = self._choose_pending_tactical(env, bot_mark, legal_ids)
+            pending_tactical = self._choose_pending_tactical(env, bot_mark, legal_ids, deadline=deadline)
             if pending_tactical is not None:
                 return pending_tactical
 
@@ -119,9 +128,16 @@ class HumanVsAgentSession:
                 # In Human-vs-Bot mode, the human's pending move is known at this point.
                 # Evaluate each legal bot response by committing the pending turn.
                 if state.pending[opponent] is not None:
-                    return self._choose_pending_lookahead(env, bot_mark, legal_ids, obs)
+                    return self._choose_pending_lookahead(
+                        env, bot_mark, legal_ids, obs, deadline=deadline
+                    )
 
-                mcts = MCTS(model=self.model, simulations=self.live_mcts_simulations, rollout_max_turns=80)
+                mcts = MCTS(
+                    model=self.model,
+                    simulations=self.live_mcts_simulations,
+                    rollout_max_turns=80,
+                    time_limit_sec=max(0.05, deadline - time.perf_counter()),
+                )
                 pi = mcts.search(env, bot_mark, self.rng)
                 scores = {i: float(pi[i]) for i in legal_ids}
                 chosen_id = self._sample_action_from_scores(scores)
@@ -141,6 +157,7 @@ class HumanVsAgentSession:
         bot_mark: Mark,
         opponent: Mark,
         legal_ids: List[int],
+        deadline: float | None = None,
     ) -> BotDecision | None:
         scores: Dict[int, float] = {}
         priors: List[float] | None = None
@@ -149,6 +166,8 @@ class HumanVsAgentSession:
             priors, _ = self.model.predict(obs)
 
         for action_id in legal_ids:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             action = ActionCodec.action_to_coord(action_id)
             sim_env = env.clone()
             try:
@@ -192,6 +211,8 @@ class HumanVsAgentSession:
                 for action_id, _ in ranked[: min(len(ranked), self.opening_two_ply_candidates)]
             ]
             for action_id in candidate_ids:
+                if deadline is not None and time.perf_counter() >= deadline:
+                    break
                 scores[action_id] += self.opening_two_ply_weight * self._opening_two_ply_worst_case(
                     env=env,
                     bot_mark=bot_mark,
@@ -287,11 +308,14 @@ class HumanVsAgentSession:
         env: WhiskEnv,
         bot_mark: Mark,
         legal_ids: List[int],
+        deadline: float | None = None,
     ) -> BotDecision | None:
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         scores: Dict[int, float] = {}
 
         for action_id in legal_ids:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             action = ActionCodec.action_to_coord(action_id)
             sim_env = env.clone()
             try:
@@ -331,7 +355,9 @@ class HumanVsAgentSession:
 
         if not scores:
             return None
-        scores = self._apply_pending_immediate_five_safety_filter(env, bot_mark, scores)
+        scores = self._apply_pending_immediate_five_safety_filter(
+            env, bot_mark, scores, deadline=deadline
+        )
         chosen_id = max(scores, key=scores.get)
         # Keep source stable for frontend handling.
         return self._build_decision(chosen_id, "opening_tactical", scores)
@@ -342,6 +368,7 @@ class HumanVsAgentSession:
         bot_mark: Mark,
         legal_ids: List[int],
         obs: Dict[str, object],
+        deadline: float | None = None,
     ) -> BotDecision:
         assert self.model is not None
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
@@ -351,12 +378,15 @@ class HumanVsAgentSession:
         candidate_ids = ordered[: min(len(ordered), self.pending_eval_top_k)]
 
         for action_id in candidate_ids:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             scores[action_id] = self._pending_action_utility(
                 env=env,
                 bot_mark=bot_mark,
                 opponent=opponent,
                 action_id=action_id,
                 prior=float(priors[action_id]),
+                deadline=deadline,
             )
 
         if not scores:
@@ -368,7 +398,9 @@ class HumanVsAgentSession:
                     scores[action_id] = float(priors[action_id])
                     break
 
-        scores = self._apply_pending_immediate_five_safety_filter(env, bot_mark, scores)
+        scores = self._apply_pending_immediate_five_safety_filter(
+            env, bot_mark, scores, deadline=deadline
+        )
         chosen_id = self._sample_action_from_scores(scores)
         return self._build_decision(chosen_id, "model_lookahead", scores)
 
@@ -377,6 +409,7 @@ class HumanVsAgentSession:
         env: WhiskEnv,
         bot_mark: Mark,
         scores: Dict[int, float],
+        deadline: float | None = None,
     ) -> Dict[int, float]:
         if not scores:
             return scores
@@ -388,6 +421,8 @@ class HumanVsAgentSession:
         has_immediate_five_risk = False
         has_safe_alternative = False
         for action_id in scores:
+            if deadline is not None and time.perf_counter() >= deadline:
+                return scores
             threat = self._opponent_next_turn_max_after_pending_reply(env, bot_mark, action_id)
             risk_by_action[action_id] = threat
             if threat >= 9:
@@ -430,8 +465,11 @@ class HumanVsAgentSession:
         opponent: Mark,
         action_id: int,
         prior: float,
+        deadline: float | None = None,
     ) -> float:
         assert self.model is not None
+        if deadline is not None and time.perf_counter() >= deadline:
+            return -1e9
         action = ActionCodec.action_to_coord(action_id)
         sim_env = env.clone()
         try:
@@ -463,7 +501,7 @@ class HumanVsAgentSession:
         opp_threat_norm = min(9, opp_threat) / 9.0
         minimax_margin = self._one_turn_minimax_margin(sim_env, bot_mark, opponent)
 
-        rollout_value = self._rollout_value(sim_env, bot_mark)
+        rollout_value = self._rollout_value(sim_env, bot_mark, deadline=deadline)
 
         return (
             (1.25 * float(next_value))
@@ -476,14 +514,18 @@ class HumanVsAgentSession:
             + (0.75 * terminal_bonus)
         )
 
-    def _rollout_value(self, env: WhiskEnv, bot_mark: Mark) -> float:
+    def _rollout_value(self, env: WhiskEnv, bot_mark: Mark, deadline: float | None = None) -> float:
         if self.pending_rollouts <= 0:
             return self._value_from_scores(env.state, bot_mark)
 
         values: List[float] = []
         for _ in range(self.pending_rollouts):
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             sim_env = env.clone()
             for _ in range(self.pending_rollout_turns):
+                if deadline is not None and time.perf_counter() >= deadline:
+                    break
                 if sim_env.is_terminal():
                     break
                 a_o = self._sample_model_action(sim_env, Mark.O)
@@ -670,6 +712,7 @@ class HumanVsAgentSession:
         bot_mark: Mark,
         opponent: Mark,
         legal_ids: List[int],
+        deadline: float | None = None,
     ) -> List[int]:
         if env.state.pending[opponent] is not None:
             # Pending opponent move is known in human-vs-bot mode. Evaluate our legal replies
@@ -677,6 +720,8 @@ class HumanVsAgentSession:
             # and others do not.
             opp_best_by_action: Dict[int, int] = {}
             for action_id in legal_ids:
+                if deadline is not None and time.perf_counter() >= deadline and opp_best_by_action:
+                    break
                 action = ActionCodec.action_to_coord(action_id)
                 sim_env = env.clone()
                 try:

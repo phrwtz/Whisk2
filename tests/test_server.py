@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -753,3 +754,47 @@ def test_pending_safety_filter_drops_immediate_five_blunders(tmp_path: Path):
 
     assert safe_id in filtered
     assert risky_id not in filtered
+
+
+def test_pending_lookahead_timeout_returns_prior_best_without_full_eval(tmp_path: Path):
+    state = GameState()
+    apply_move(state, Mark.O, 0, 0)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=11)
+    bot.stochastic_top_k = 1
+    bot.stochastic_epsilon = 0.0
+    bot.stochastic_temperature = 0.01
+
+    class DummyModel:
+        def predict(self, obs):
+            priors = [0.0] * ActionCodec.NUM_ACTIONS
+            priors[ActionCodec.coord_to_action(1, 1)] = 1.0
+            priors[ActionCodec.coord_to_action(2, 2)] = 0.5
+            return priors, 0.0
+
+    bot.model = DummyModel()  # type: ignore[assignment]
+
+    def _utility_should_not_run(*args, **kwargs):
+        raise AssertionError("pending utility should not run after timeout")
+
+    bot._pending_action_utility = _utility_should_not_run  # type: ignore[method-assign]
+
+    from backend.app.agents.encoding import StateEncoder
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+    obs = StateEncoder.encode_observation(env.state, Mark.X)
+    legal_ids = [i for i, bit in enumerate(obs["legal_action_mask"]) if bit]
+
+    decision = bot._choose_pending_lookahead(
+        env=env,
+        bot_mark=Mark.X,
+        legal_ids=legal_ids,
+        obs=obs,
+        deadline=time.perf_counter() - 0.001,
+    )
+
+    assert (decision.row, decision.col) == (1, 1)
+    assert decision.source == "model_lookahead"

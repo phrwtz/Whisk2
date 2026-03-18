@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
@@ -67,11 +68,13 @@ class MCTS:
         simulations: int = 48,
         c_puct: float = 1.25,
         rollout_max_turns: int = 120,
+        time_limit_sec: float | None = None,
     ) -> None:
         self.model = model
         self.simulations = simulations
         self.c_puct = c_puct
         self.rollout_max_turns = rollout_max_turns
+        self.time_limit_sec = time_limit_sec
 
     def search(self, env: WhiskEnv, player: Mark, rng: random.Random) -> List[float]:
         """Return improved policy distribution over 64 actions."""
@@ -98,7 +101,13 @@ class MCTS:
             for ch in root.children.values():
                 ch.prior /= total_prior
 
+        deadline = None
+        if self.time_limit_sec is not None and self.time_limit_sec > 0:
+            deadline = time.perf_counter() + self.time_limit_sec
+
         for _ in range(self.simulations):
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             action = self._select(root)
             leaf_value = self._simulate_once(env, player, action, rng)
             child = root.children[action]
