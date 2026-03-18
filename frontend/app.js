@@ -309,15 +309,15 @@ function computeTurnMessage() {
     const humanMoved = !!pendingFlags.O;
     const botMoved = !!pendingFlags.X;
     if (!humanMoved && !botMoved) {
-      return "WhiskBot hasn't moved yet.";
+      return "You haven't moved and neither has WhiskBot.";
     }
     if (humanMoved && !botMoved) {
-      return "Waiting for WhiskBot's move.";
+      return "You've made your move but WhiskBot can't see where you moved. Waiting for WhiskBot's move.";
     }
     if (!humanMoved && botMoved) {
       return "WhiskBot has moved. It's your turn.";
     }
-    return "WhiskBot hasn't moved yet.";
+    return "You haven't moved and neither has WhiskBot.";
   }
 
   const oName = playerName('O', 'first player');
@@ -420,6 +420,23 @@ function scoreFlashActor(mark) {
 }
 
 function scoreFlashLine(mark, addedScore) {
+  if (modeChosen === MODE_HUMAN_VS_BOT) {
+    if (mark === 'O') {
+      if (addedScore === 2) {
+        return 'You got 3 in a row twice! You earned 2 points!';
+      }
+      const rowLen = rowLengthFromScore(addedScore);
+      const pointWord = addedScore === 1 ? 'point' : 'points';
+      return `You got ${rowLen} in a row! You earned ${addedScore} ${pointWord}!`;
+    }
+    if (addedScore === 2) {
+      return 'WhiskBot got 3 in a row twice! WhiskBot scores 2 points!';
+    }
+    const rowLen = rowLengthFromScore(addedScore);
+    const pointWord = addedScore === 1 ? 'point' : 'points';
+    return `WhiskBot got ${rowLen} in a row! WhiskBot scores ${addedScore} ${pointWord}!`;
+  }
+
   const actor = scoreFlashActor(mark);
   const getVerb = actor === 'You' ? 'get' : 'gets';
   const scoreVerb = actor === 'You' ? 'score' : 'scores';
