@@ -58,6 +58,18 @@ class HumanVsAgentSession:
         self.opening_tactical_enabled = bool(
             self._env_int("WHISK_BOT_OPENING_TACTICAL", 1, min_value=0, max_value=1)
         )
+        self.opening_two_ply_enabled = bool(
+            self._env_int("WHISK_BOT_OPENING_2PLY", 1, min_value=0, max_value=1)
+        )
+        self.opening_two_ply_candidates = self._env_int(
+            "WHISK_BOT_OPENING_2PLY_CANDIDATES", 8, min_value=2, max_value=24
+        )
+        self.opening_two_ply_responses = self._env_int(
+            "WHISK_BOT_OPENING_2PLY_RESPONSES", 6, min_value=2, max_value=24
+        )
+        self.opening_two_ply_weight = self._env_float(
+            "WHISK_BOT_OPENING_2PLY_WEIGHT", 0.45, min_value=0.0, max_value=2.0
+        )
         if checkpoint_path.exists():
             try:
                 self.model = WhiskPolicyValueModel.load(checkpoint_path)
@@ -94,6 +106,11 @@ class HumanVsAgentSession:
             opening_decision = self._choose_opening_tactical(env, bot_mark, opponent, legal_ids)
             if opening_decision is not None:
                 return opening_decision
+
+        if state.pending[opponent] is not None and self.model is None:
+            pending_tactical = self._choose_pending_tactical(env, bot_mark, legal_ids)
+            if pending_tactical is not None:
+                return pending_tactical
 
         if self.model is not None:
             obs = StateEncoder.encode_observation(env.state, bot_mark)
@@ -168,9 +185,154 @@ class HumanVsAgentSession:
                 score += 0.35
             scores[action_id] = score
 
+        if self.opening_two_ply_enabled and self.opening_two_ply_weight > 0 and len(scores) > 1:
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+            candidate_ids = [
+                action_id
+                for action_id, _ in ranked[: min(len(ranked), self.opening_two_ply_candidates)]
+            ]
+            for action_id in candidate_ids:
+                scores[action_id] += self.opening_two_ply_weight * self._opening_two_ply_worst_case(
+                    env=env,
+                    bot_mark=bot_mark,
+                    opponent=opponent,
+                    action_id=action_id,
+                )
+
         if not scores:
             return None
         chosen_id = max(scores, key=scores.get)
+        return self._build_decision(chosen_id, "opening_tactical", scores)
+
+    def _opening_two_ply_worst_case(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        action_id: int,
+    ) -> float:
+        action = ActionCodec.action_to_coord(action_id)
+        sim_env = env.clone()
+        try:
+            sim_env.reserve_move(bot_mark, action)
+        except Exception:
+            return -1.0
+
+        opp_legal = sim_env.legal_actions(opponent)
+        if not opp_legal:
+            return 0.0
+
+        ranked_replies = sorted(
+            opp_legal,
+            key=lambda coord: (
+                self._immediate_move_score(sim_env, opponent, coord),
+                self._center_bias(coord),
+            ),
+            reverse=True,
+        )
+
+        worst_case = float("inf")
+        for opp_action in ranked_replies[: min(len(ranked_replies), self.opening_two_ply_responses)]:
+            utility = self._opening_two_ply_reply_utility(
+                sim_env=sim_env,
+                bot_mark=bot_mark,
+                opponent=opponent,
+                opp_action=opp_action,
+            )
+            worst_case = min(worst_case, utility)
+
+        return 0.0 if not math.isfinite(worst_case) else worst_case
+
+    def _opening_two_ply_reply_utility(
+        self,
+        sim_env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        opp_action: Coord,
+    ) -> float:
+        reply_env = sim_env.clone()
+        try:
+            reply_env.reserve_move(opponent, opp_action)
+            if not reply_env.ready_to_commit():
+                return -1.0
+            committed = reply_env.commit_pending_turn()
+        except Exception:
+            return -1.0
+
+        added_self = int(committed.added.get(bot_mark.value, 0))
+        added_opp = int(committed.added.get(opponent.value, 0))
+        immediate_delta = max(-1.0, min(1.0, (added_self - added_opp) / 9.0))
+
+        bot_threat = self._max_immediate_score(reply_env, bot_mark)
+        opp_threat = self._max_immediate_score(reply_env, opponent)
+        threat_margin = (min(9, bot_threat) - min(9, opp_threat)) / 9.0
+        score_value = self._value_from_scores(reply_env.state, bot_mark)
+
+        terminal_bonus = 0.0
+        if committed.done:
+            if committed.winner == bot_mark.value:
+                terminal_bonus = 1.0
+            elif committed.winner == opponent.value:
+                terminal_bonus = -1.0
+
+        return (
+            (0.55 * threat_margin)
+            + (0.30 * immediate_delta)
+            + (0.15 * score_value)
+            + (0.75 * terminal_bonus)
+        )
+
+    def _choose_pending_tactical(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        legal_ids: List[int],
+    ) -> BotDecision | None:
+        opponent = Mark.X if bot_mark == Mark.O else Mark.O
+        scores: Dict[int, float] = {}
+
+        for action_id in legal_ids:
+            action = ActionCodec.action_to_coord(action_id)
+            sim_env = env.clone()
+            try:
+                sim_env.reserve_move(bot_mark, action)
+                if not sim_env.ready_to_commit():
+                    continue
+                committed = sim_env.commit_pending_turn()
+            except Exception:
+                continue
+
+            added_self = int(committed.added.get(bot_mark.value, 0))
+            added_opp = int(committed.added.get(opponent.value, 0))
+            immediate_delta = max(-1.0, min(1.0, (added_self - added_opp) / 9.0))
+
+            bot_threat = self._max_immediate_score(sim_env, bot_mark)
+            opp_threat = self._max_immediate_score(sim_env, opponent)
+            threat_margin = (min(9, bot_threat) - min(9, opp_threat)) / 9.0
+            center = self._center_bias(action)
+            score = (0.70 * immediate_delta) + (0.62 * threat_margin) + (0.10 * center)
+
+            if opp_threat >= 9:
+                score -= 1.30
+            elif opp_threat >= 4:
+                score -= 0.55
+            if bot_threat >= 9:
+                score += 0.65
+            elif bot_threat >= 4:
+                score += 0.25
+
+            if committed.done:
+                if committed.winner == bot_mark.value:
+                    score += 1.0
+                elif committed.winner == opponent.value:
+                    score -= 1.0
+
+            scores[action_id] = score
+
+        if not scores:
+            return None
+        chosen_id = max(scores, key=scores.get)
+        # Keep source stable for frontend handling.
         return self._build_decision(chosen_id, "opening_tactical", scores)
 
     def _choose_pending_lookahead(
@@ -456,6 +618,31 @@ class HumanVsAgentSession:
         opponent: Mark,
         legal_ids: List[int],
     ) -> List[int]:
+        if env.state.pending[opponent] is not None:
+            # Pending opponent move is known in human-vs-bot mode. Evaluate our legal replies
+            # after commit and force a block only when some replies avoid an immediate 5 threat
+            # and others do not.
+            opp_best_by_action: Dict[int, int] = {}
+            for action_id in legal_ids:
+                action = ActionCodec.action_to_coord(action_id)
+                sim_env = env.clone()
+                try:
+                    sim_env.reserve_move(bot_mark, action)
+                    if not sim_env.ready_to_commit():
+                        continue
+                    sim_env.commit_pending_turn()
+                except Exception:
+                    continue
+                opp_best_by_action[action_id] = self._max_immediate_score(sim_env, opponent)
+
+            if not opp_best_by_action:
+                return []
+            min_opp_best = min(opp_best_by_action.values())
+            has_risky = any(score >= 9 for score in opp_best_by_action.values())
+            if not has_risky or min_opp_best >= 9:
+                return []
+            return [action_id for action_id, score in opp_best_by_action.items() if score == min_opp_best]
+
         opponent_threat_blocks = self._imminent_five_blockers(env, opponent, legal_ids)
         if not opponent_threat_blocks:
             return []

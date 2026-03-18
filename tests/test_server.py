@@ -708,3 +708,19 @@ def test_human_adapter_opening_tactical_blocks_high_value_extension(tmp_path: Pa
 
     assert (decision.row, decision.col) == (0, 3)
     assert decision.source in ("opening_tactical", "must_block")
+
+
+def test_human_adapter_pending_reply_blocks_imminent_five_threat(tmp_path: Path):
+    # Human O already has 0,1,2 and has pending move at 0,3 this turn.
+    # Bot X should reserve 0,4 now so O cannot take an immediate 5 threat next turn.
+    state = GameState()
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+    apply_move(state, Mark.O, 0, 3)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=3)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 4)
+    assert decision.source in ("must_block", "opening_tactical")
