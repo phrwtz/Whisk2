@@ -63,6 +63,7 @@ let scoreFlashTimer = null;
 let isScoreFlashActive = false;
 let scoreFlashExpiresAt = 0;
 let lastScoreFlashSignature = '';
+let gameOverMediaUntil = 0;
 let visiblePieceKeys = new Set();
 let moveAnimationQueue = Promise.resolve();
 let suppressOpponentRevealAnimationOnce = false;
@@ -477,6 +478,10 @@ function showScoreFlashBatch(entries) {
   }
   scoreFlashTimer = window.setTimeout(() => {
     isScoreFlashActive = false;
+    if (isGameOver && Date.now() < gameOverMediaUntil) {
+      scoreFlashTimer = null;
+      return;
+    }
     setStatusMessage(computeTurnMessage());
     scoreFlashTimer = null;
   }, 3000);
@@ -519,7 +524,9 @@ function maybeShowScoreFlashFromState(prevScores, nextScores) {
 
 function showGameOverMedia(kind, text, options = {}) {
   const loop = options.loop !== false;
+  const durationMs = Number.isFinite(options.durationMs) ? Number(options.durationMs) : 5000;
   const src = (kind === 'tie') ? TIE_VIDEO_URL : WIN_VIDEO_URL;
+  gameOverMediaUntil = Date.now() + durationMs;
   setStatusHtml(
     `<div class="gameover-row">` +
     `<div class="gameover-text">${escapeHtml(text)}</div>` +
@@ -536,8 +543,9 @@ function showGameOverMedia(kind, text, options = {}) {
   }
   window.setTimeout(() => {
     if (!isGameOver) return;
+    if (Date.now() < gameOverMediaUntil) return;
     setStatusMessage('Game over...');
-  }, 10000);
+  }, durationMs);
 }
 
 function formatBotExplanation(msg) {
@@ -908,6 +916,7 @@ function handleMessage(msg) {
       break;
 
     case 'pending_flags':
+      if (isGameOver && Date.now() < gameOverMediaUntil) break;
       pendingFlags = {
         O: !!msg.pending?.O,
         X: !!msg.pending?.X,
@@ -953,6 +962,7 @@ function handleMessage(msg) {
       break;
 
     case 'turn_committed':
+      if (isGameOver && Date.now() < gameOverMediaUntil) break;
       // After commit, pending clears; state will follow.
       pendingFlags = { O: false, X: false };
       if (isScoreFlashActive || Date.now() < scoreFlashExpiresAt) break;
@@ -1063,7 +1073,7 @@ function handleMessage(msg) {
 
       // Don’t overwrite explicit server info messages like “X has joined” or “You reset”
       // unless we’re in normal play flow.
-      if (!isScoreFlashActive && !msg.refresh && (modeChosen || myMark !== 'O')) {
+      if (!isScoreFlashActive && !msg.refresh && !isGameOver && (modeChosen || myMark !== 'O')) {
         setStatusMessage(computeTurnMessage());
       }
 

@@ -756,6 +756,34 @@ def test_pending_safety_filter_drops_immediate_five_blunders(tmp_path: Path):
     assert risky_id not in filtered
 
 
+def test_pending_safety_filter_blocks_immediate_score_to_50(tmp_path: Path):
+    # O is near target score and can create a 4-point line next turn unless X blocks now.
+    state = GameState()
+    state.scores[Mark.O] = 46
+    state.scores[Mark.X] = 30
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    apply_move(state, Mark.O, 0, 2)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=17)
+
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+    safe_id = ActionCodec.coord_to_action(0, 3)   # denies O's 4-point extension
+    risky_id = ActionCodec.coord_to_action(7, 7)  # allows O to score to 50+ next turn
+    filtered = bot._apply_pending_immediate_five_safety_filter(
+        env=env,
+        bot_mark=Mark.X,
+        scores={safe_id: -1.0, risky_id: 10.0},
+    )
+
+    assert safe_id in filtered
+    assert risky_id not in filtered
+
+
 def test_pending_lookahead_timeout_returns_prior_best_without_full_eval(tmp_path: Path):
     state = GameState()
     apply_move(state, Mark.O, 0, 0)

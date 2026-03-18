@@ -329,17 +329,25 @@ class HumanVsAgentSession:
             added_self = int(committed.added.get(bot_mark.value, 0))
             added_opp = int(committed.added.get(opponent.value, 0))
             immediate_delta = max(-1.0, min(1.0, (added_self - added_opp) / 9.0))
+            opp_score_after = int(sim_env.state.scores[opponent])
+            defense_urgency = self._defense_urgency(sim_env.state, bot_mark, opponent)
 
             bot_threat = self._max_immediate_score(sim_env, bot_mark)
             opp_threat = self._max_immediate_score(sim_env, opponent)
             threat_margin = (min(9, bot_threat) - min(9, opp_threat)) / 9.0
             center = self._center_bias(action)
-            score = (0.70 * immediate_delta) + (0.62 * threat_margin) + (0.10 * center)
+            score = (
+                (0.70 * immediate_delta)
+                + ((0.62 + (0.35 * defense_urgency)) * threat_margin)
+                + (0.10 * center)
+            )
 
             if opp_threat >= 9:
                 score -= 1.30
             elif opp_threat >= 4:
                 score -= 0.55
+            if opp_score_after + opp_threat >= 50:
+                score -= 1.50 + (0.80 * defense_urgency)
             if bot_threat >= 9:
                 score += 0.65
             elif bot_threat >= 4:
@@ -418,45 +426,55 @@ class HumanVsAgentSession:
             return scores
 
         risk_by_action: Dict[int, int] = {}
+        opp_score_after_by_action: Dict[int, int] = {}
         has_immediate_five_risk = False
+        has_immediate_win_risk = False
         has_safe_alternative = False
         for action_id in scores:
             if deadline is not None and time.perf_counter() >= deadline:
                 return scores
-            threat = self._opponent_next_turn_max_after_pending_reply(env, bot_mark, action_id)
+            threat, opp_score_after = self._opponent_next_turn_risk_after_pending_reply(
+                env, bot_mark, action_id
+            )
             risk_by_action[action_id] = threat
+            opp_score_after_by_action[action_id] = opp_score_after
             if threat >= 9:
                 has_immediate_five_risk = True
+            if opp_score_after + threat >= 50:
+                has_immediate_win_risk = True
             else:
                 has_safe_alternative = True
 
-        if not (has_immediate_five_risk and has_safe_alternative):
+        if not ((has_immediate_five_risk or has_immediate_win_risk) and has_safe_alternative):
             return scores
 
         filtered = {
             action_id: score
             for action_id, score in scores.items()
-            if risk_by_action.get(action_id, 9) < 9
+            if (
+                risk_by_action.get(action_id, 9) < 9
+                and (opp_score_after_by_action.get(action_id, 50) + risk_by_action.get(action_id, 9) < 50)
+            )
         }
         return filtered or scores
 
-    def _opponent_next_turn_max_after_pending_reply(
+    def _opponent_next_turn_risk_after_pending_reply(
         self,
         env: WhiskEnv,
         bot_mark: Mark,
         action_id: int,
-    ) -> int:
+    ) -> tuple[int, int]:
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         action = ActionCodec.action_to_coord(action_id)
         sim_env = env.clone()
         try:
             sim_env.reserve_move(bot_mark, action)
             if not sim_env.ready_to_commit():
-                return 9
+                return (9, 50)
             sim_env.commit_pending_turn()
         except Exception:
-            return 9
-        return self._max_immediate_score(sim_env, opponent)
+            return (9, 50)
+        return (self._max_immediate_score(sim_env, opponent), int(sim_env.state.scores[opponent]))
 
     def _pending_action_utility(
         self,
@@ -500,8 +518,13 @@ class HumanVsAgentSession:
         bot_threat_norm = min(9, bot_threat) / 9.0
         opp_threat_norm = min(9, opp_threat) / 9.0
         minimax_margin = self._one_turn_minimax_margin(sim_env, bot_mark, opponent)
+        defense_urgency = self._defense_urgency(sim_env.state, bot_mark, opponent)
+        opp_score_after = int(sim_env.state.scores[opponent])
 
         rollout_value = self._rollout_value(sim_env, bot_mark, deadline=deadline)
+        win_risk_penalty = 0.0
+        if opp_score_after + opp_threat >= 50:
+            win_risk_penalty = 1.10 + (0.80 * defense_urgency)
 
         return (
             (1.25 * float(next_value))
@@ -510,7 +533,8 @@ class HumanVsAgentSession:
             + (0.30 * minimax_margin)
             + (0.20 * prior)
             + (0.12 * bot_threat_norm)
-            - (0.20 * opp_threat_norm)
+            - ((0.20 + (0.55 * defense_urgency)) * opp_threat_norm)
+            - win_risk_penalty
             + (0.75 * terminal_bonus)
         )
 
@@ -620,6 +644,14 @@ class HumanVsAgentSession:
         value = diff / 50.0
         return max(-1.0, min(1.0, value))
 
+    @staticmethod
+    def _defense_urgency(state: GameState, bot_mark: Mark, opponent: Mark) -> float:
+        bot_score = int(state.scores[bot_mark])
+        opp_score = int(state.scores[opponent])
+        near_goal = max(0.0, min(1.0, (opp_score - 35.0) / 15.0))
+        lead = max(0.0, min(1.0, (opp_score - bot_score) / 20.0))
+        return min(1.0, (0.65 * near_goal) + (0.35 * lead))
+
     def _build_decision(self, chosen_id: int, source: str, scores: Dict[int, float]) -> BotDecision:
         chosen_row, chosen_col = ActionCodec.action_to_coord(chosen_id)
         top = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:3]
@@ -719,6 +751,7 @@ class HumanVsAgentSession:
             # after commit and force a block only when some replies avoid an immediate 5 threat
             # and others do not.
             opp_best_by_action: Dict[int, int] = {}
+            opp_score_after_by_action: Dict[int, int] = {}
             for action_id in legal_ids:
                 if deadline is not None and time.perf_counter() >= deadline and opp_best_by_action:
                     break
@@ -732,9 +765,19 @@ class HumanVsAgentSession:
                 except Exception:
                     continue
                 opp_best_by_action[action_id] = self._max_immediate_score(sim_env, opponent)
+                opp_score_after_by_action[action_id] = int(sim_env.state.scores[opponent])
 
             if not opp_best_by_action:
                 return []
+            win_risk_by_action = {
+                action_id: (opp_score_after_by_action[action_id] + opp_best_by_action[action_id] >= 50)
+                for action_id in opp_best_by_action
+            }
+            has_win_risk = any(win_risk_by_action.values())
+            if has_win_risk:
+                safe_from_win = [action_id for action_id, risky in win_risk_by_action.items() if not risky]
+                if safe_from_win:
+                    return safe_from_win
             min_opp_best = min(opp_best_by_action.values())
             has_risky = any(score >= 9 for score in opp_best_by_action.values())
             if not has_risky or min_opp_best >= 9:
