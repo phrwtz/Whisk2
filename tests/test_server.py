@@ -237,9 +237,11 @@ def test_local_mode_single_player_alternates_marks_and_commits_immediately():
     client = TestClient(app)
 
     with client.websocket_connect("/ws") as ws_o:
-        ws_o.send_json({"type": "join", "name": "OPlayer", "mode": "local"})
+        ws_o.send_json({"type": "join", "name": "OPlayer", "mode": "local", "x_name": "XPlayer"})
         _recv_type(ws_o, "joined")
-        _recv_type(ws_o, "state")
+        init_state = _recv_type(ws_o, "state")
+        assert init_state["players"]["O"] == "OPlayer"
+        assert init_state["players"]["X"] == "XPlayer"
 
         ws_o.send_json({"type": "move", "row": 0, "col": 0})
         first_state = _recv_state_where(

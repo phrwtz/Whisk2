@@ -96,6 +96,10 @@ class GameManager:
         self.bot_pending_decision: Optional[object] = None
         self.bot_move_task: Optional[asyncio.Task] = None
         self.bot_turn_nonce = 0
+        self.local_player_names: Dict[Mark, str] = {
+            Mark.O: "Player O",
+            Mark.X: "Player X",
+        }
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -161,14 +165,22 @@ async def send_state(to_ws: WebSocket, viewer_mark: Optional[Mark] = None, refre
         "mode": manager.mode,
         "local_next_mark": manager.local_next_mark.value if manager.mode == "local" else None,
         "players": {
-            "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
+            "O": (
+                manager.local_player_names.get(Mark.O)
+                if manager.mode == MODE_LOCAL and Mark.O in manager.players
+                else (manager.players[Mark.O].name if Mark.O in manager.players else None)
+            ),
             "X": (
                 manager.players[Mark.X].name
                 if Mark.X in manager.players
                 else (
                     manager.bot_name
                     if manager.mode == MODE_HUMAN_VS_BOT and Mark.O in manager.players
-                    else None
+                    else (
+                        manager.local_player_names.get(Mark.X)
+                        if manager.mode == MODE_LOCAL and Mark.O in manager.players
+                        else None
+                    )
                 )
             ),
         },
@@ -188,14 +200,22 @@ async def send_lobby(to_ws: WebSocket) -> None:
         "type": "lobby",
         "mode": manager.mode,
         "players": {
-            "O": manager.players[Mark.O].name if Mark.O in manager.players else None,
+            "O": (
+                manager.local_player_names.get(Mark.O)
+                if manager.mode == MODE_LOCAL and Mark.O in manager.players
+                else (manager.players[Mark.O].name if Mark.O in manager.players else None)
+            ),
             "X": (
                 manager.players[Mark.X].name
                 if Mark.X in manager.players
                 else (
                     manager.bot_name
                     if manager.mode == MODE_HUMAN_VS_BOT and Mark.O in manager.players
-                    else None
+                    else (
+                        manager.local_player_names.get(Mark.X)
+                        if manager.mode == MODE_LOCAL and Mark.O in manager.players
+                        else None
+                    )
                 )
             ),
         },
@@ -242,6 +262,13 @@ def parse_bot_seed(raw: object, default: int = 0) -> int:
         return int(raw) if raw is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def parse_player_name(raw: object, default: str) -> str:
+    if not isinstance(raw, str):
+        return default
+    name = raw.strip()
+    return name or default
 
 
 def normalize_mode(raw: object) -> Optional[str]:
@@ -371,6 +398,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 name = (msg.get("name") or "").strip() or "Player"
                 requested_bot_seed = parse_bot_seed(msg.get("bot_seed"), manager.bot_seed)
                 requested_mode = normalize_mode(msg.get("mode"))
+                requested_local_x_name = parse_player_name(msg.get("x_name"), "Player X")
 
                 manager.prune_disconnected()
 
@@ -440,6 +468,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         continue
 
                 manager.players[mark] = PlayerConn(ws=ws, name=name, mark=mark)
+                if mark == Mark.O and manager.mode == MODE_LOCAL:
+                    manager.local_player_names[Mark.O] = name
+                    manager.local_player_names[Mark.X] = requested_local_x_name
                 manager.ws_to_mark[ws_id] = mark
                 manager.lobby_clients.pop(ws_id, None)
 
@@ -495,6 +526,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await manager.broadcast({"type": "mode", "mode": mode})
                 if mode == MODE_LOCAL:
                     manager.local_next_mark = Mark.O
+                    if Mark.O in manager.players:
+                        manager.local_player_names[Mark.O] = manager.players[Mark.O].name
+                    manager.local_player_names[Mark.X] = parse_player_name(
+                        msg.get("x_name"), manager.local_player_names.get(Mark.X, "Player X")
+                    )
                 await broadcast_state()
                 await broadcast_lobby()
                 if mode == MODE_HUMAN_VS_BOT:
