@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY frontend ./frontend
 COPY backend ./backend
 COPY artifacts/releases ./artifacts/releases
+COPY ["local instructions.txt", "remote instructions.txt", "human_vs_bot.txt", "./"]
 
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
