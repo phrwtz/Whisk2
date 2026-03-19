@@ -508,8 +508,8 @@ async def maybe_schedule_demo_move() -> None:
     if manager.bot_session is None:
         manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
 
-    delay_min = _env_float("WHISK_DEMO_DELAY_MIN_SEC", 1.5, min_value=0.0, max_value=10.0)
-    delay_max = _env_float("WHISK_DEMO_DELAY_MAX_SEC", 2.5, min_value=0.0, max_value=30.0)
+    delay_min = _env_float("WHISK_DEMO_DELAY_MIN_SEC", 0.5, min_value=0.0, max_value=10.0)
+    delay_max = _env_float("WHISK_DEMO_DELAY_MAX_SEC", 1.5, min_value=0.0, max_value=30.0)
     if delay_max < delay_min:
         delay_max = delay_min
     decision_timeout_sec = _env_float(
@@ -534,6 +534,22 @@ async def maybe_schedule_demo_move() -> None:
             candidates=[BotCandidate(row=row, col=col, score=1.0)],
         )
 
+    def _random_demo_decision(mark: Mark) -> BotDecision:
+        if manager.bot_session is None:
+            manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
+        env = WhiskEnv(mode="remote")
+        env.state = deepcopy(manager.state)
+        legal = env.legal_actions(mark)
+        if not legal:
+            raise RuntimeError("Demo player has no legal actions")
+        row, col = manager.bot_session.rng.choice(legal)
+        return BotDecision(
+            row=row,
+            col=col,
+            source="demo_opening_random",
+            candidates=[BotCandidate(row=row, col=col, score=1.0)],
+        )
+
     async def _run_demo_move() -> None:
         should_retry = False
         should_schedule_next = False
@@ -552,14 +568,17 @@ async def maybe_schedule_demo_move() -> None:
             if manager.bot_session is None:
                 manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
 
-            state_snapshot = deepcopy(manager.state)
-            try:
-                decision = await asyncio.wait_for(
-                    asyncio.to_thread(manager.bot_session.choose_decision, state_snapshot, moving_mark),
-                    timeout=decision_timeout_sec,
-                )
-            except Exception:
-                decision = _fallback_bot_decision(moving_mark)
+            if expected_turn < 2:
+                decision = _random_demo_decision(moving_mark)
+            else:
+                state_snapshot = deepcopy(manager.state)
+                try:
+                    decision = await asyncio.wait_for(
+                        asyncio.to_thread(manager.bot_session.choose_decision, state_snapshot, moving_mark),
+                        timeout=decision_timeout_sec,
+                    )
+                except Exception:
+                    decision = _fallback_bot_decision(moving_mark)
 
             if manager.mode != MODE_DEMO or manager.game_over:
                 return

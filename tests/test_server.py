@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.agents.deploy import promote_release_artifact
 from backend.app.agents.encoding import ActionCodec
-from backend.app.agents.human_adapter import HumanVsAgentSession
+from backend.app.agents.human_adapter import BotCandidate, BotDecision, HumanVsAgentSession
 from backend.app.agents.model import WhiskPolicyValueModel
 from backend.app.game import GameState, Mark, Piece, apply_move, commit_turn
 from backend.app.main import app, manager
@@ -685,6 +685,56 @@ def test_second_player_cannot_join_active_demo_game():
         ws_x.send_json({"type": "join", "name": "Guest", "mode": "remote"})
         err = _recv_type(ws_x, "error")
         assert err["message"] == "A demo is already in progress."
+
+    manager.reset()
+
+
+def test_demo_mode_first_two_moves_random_then_model(monkeypatch):
+    manager.reset()
+    client = TestClient(app)
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.01")
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.01")
+    monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+
+    calls = {"n": 0}
+
+    def quick_choose(self, state, bot_mark):
+        calls["n"] += 1
+        occ = set(state.board_occupancy().keys())
+        reserved = state.reserved_squares()
+        for row in range(8):
+            for col in range(8):
+                coord = (row, col)
+                if coord in occ or coord in reserved:
+                    continue
+                return BotDecision(
+                    row=row,
+                    col=col,
+                    source="test_model",
+                    candidates=[BotCandidate(row=row, col=col, score=1.0)],
+                )
+        raise RuntimeError("No legal moves")
+
+    monkeypatch.setattr(HumanVsAgentSession, "choose_decision", quick_choose)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Viewer", "mode": "demo"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        # First two turns are random-only; model chooser must not be called yet.
+        deadline = time.time() + 3.0
+        while time.time() < deadline and manager.state.turn < 2:
+            time.sleep(0.01)
+        assert manager.state.turn >= 2
+        assert calls["n"] == 0
+
+        # From turn 3 onward, model chooser path is enabled.
+        deadline = time.time() + 3.0
+        while time.time() < deadline and manager.state.turn < 3:
+            time.sleep(0.01)
+        assert manager.state.turn >= 3
+        assert calls["n"] >= 1
 
     manager.reset()
 
