@@ -616,6 +616,49 @@ def test_second_player_cannot_join_active_human_vs_bot_game():
     manager.reset()
 
 
+def test_human_vs_bot_join_evicts_leftover_x_and_lobby_sockets():
+    manager.reset()
+    client = TestClient(app)
+
+    with (
+        client.websocket_connect("/ws") as ws_host,
+        client.websocket_connect("/ws") as ws_stray_x,
+        client.websocket_connect("/ws") as ws_lobby,
+        client.websocket_connect("/ws") as ws_new_host,
+    ):
+        _recv_type(ws_host, "lobby")
+        _recv_type(ws_stray_x, "lobby")
+        _recv_type(ws_lobby, "lobby")
+        _recv_type(ws_new_host, "lobby")
+
+        ws_host.send_json({"type": "join", "name": "Host", "mode": "remote"})
+        _recv_type(ws_host, "joined")
+        _recv_type(ws_host, "state")
+
+        ws_stray_x.send_json({"type": "join", "name": "StrayX"})
+        _recv_type(ws_stray_x, "joined")
+        _recv_type(ws_stray_x, "state")
+        _recv_type(ws_host, "state")
+
+        # Simulate a prior session ending with X/lobby tabs still open.
+        ws_host.close()
+        _recv_state_where(ws_stray_x, lambda s: s["players"]["O"] is None)
+
+        ws_new_host.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot"})
+        joined = _recv_type(ws_new_host, "joined")
+        assert joined["mark"] == "O"
+        state = _recv_type(ws_new_host, "state")
+        assert state["mode"] == "human_vs_bot"
+        assert state["players"]["X"] == "WhiskBot"
+
+        # Guardrail: stale X player and stale lobby sockets are no longer tracked.
+        assert Mark.X not in manager.players
+        assert list(manager.ws_to_mark.values()) == [Mark.O]
+        assert manager.lobby_clients == {}
+
+    manager.reset()
+
+
 def test_bot_mode_sends_explanation_event():
     manager.reset()
     client = TestClient(app)

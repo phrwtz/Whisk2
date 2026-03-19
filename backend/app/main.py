@@ -142,7 +142,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 INSTRUCTIONS_PATHS = {
     MODE_LOCAL: ROOT_DIR / "local instructions.txt",
     MODE_REMOTE: ROOT_DIR / "remote instructions.txt",
-    MODE_HUMAN_VS_BOT: ROOT_DIR / "human_vs_bot_instructions.txt",
+    MODE_HUMAN_VS_BOT: ROOT_DIR / "human_vs_bot.txt",
 }
 
 # Serve frontend assets from repo frontend directory.
@@ -250,6 +250,23 @@ async def broadcast_lobby() -> None:
         except Exception:
             # stale sockets are cleaned up on disconnect; ignore send races
             pass
+
+
+def evict_leftover_for_human_vs_bot(host_ws_id: str) -> None:
+    """Keep only the joining host tracked when starting a new human-vs-bot session."""
+    for stale_ws_id, mark in list(manager.ws_to_mark.items()):
+        if stale_ws_id == host_ws_id:
+            continue
+        if mark == Mark.X:
+            manager.ws_to_mark.pop(stale_ws_id, None)
+
+    if Mark.X in manager.players:
+        del manager.players[Mark.X]
+        manager.state.pending[Mark.X] = None
+
+    for lobby_ws_id in list(manager.lobby_clients.keys()):
+        if lobby_ws_id != host_ws_id:
+            manager.lobby_clients.pop(lobby_ws_id, None)
 
 
 async def broadcast_state(refresh: bool = False) -> None:
@@ -480,6 +497,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 requested_local_x_name = parse_player_name(msg.get("x_name"), "Player X")
 
                 manager.prune_disconnected()
+                if requested_mode == MODE_HUMAN_VS_BOT and Mark.O not in manager.players:
+                    evict_leftover_for_human_vs_bot(ws_id)
 
                 if manager.is_full():
                     await manager.send(ws, {

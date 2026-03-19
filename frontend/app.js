@@ -171,7 +171,8 @@ function instructionsMode() {
 }
 
 function updateInstructionsButtonState() {
-  const preJoinActive = !myMark;
+  const preJoinModeSelected = !!(selectedJoinMode && instructionsMode());
+  const preJoinActive = !myMark && preJoinModeSelected;
   if (instructionsBtnSetup) {
     instructionsBtnSetup.classList.toggle('hidden', !preJoinActive);
     instructionsBtnSetup.disabled = false;
