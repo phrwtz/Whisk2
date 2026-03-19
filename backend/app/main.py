@@ -349,7 +349,12 @@ async def send_bot_explanation_to_o(mark: Mark, decision: object) -> None:
     )
 
 
-async def finalize_bot_commit(summary: Dict[str, object], decision: Optional[object]) -> None:
+async def finalize_bot_commit(
+    summary: Dict[str, object],
+    decision: Optional[object],
+    *,
+    schedule_next: bool = True,
+) -> bool:
     await broadcast_state(refresh=True)
     if decision is not None:
         await send_bot_explanation_to_o(Mark.X, decision)
@@ -372,10 +377,12 @@ async def finalize_bot_commit(summary: Dict[str, object], decision: Optional[obj
             "message": game_over_message(winner_mark),
             "winner": winner_mark,
         })
-        return
+        return False
 
     manager.bot_turn_nonce += 1
-    await maybe_schedule_bot_move()
+    if schedule_next:
+        await maybe_schedule_bot_move()
+    return True
 
 
 async def maybe_schedule_bot_move() -> None:
@@ -416,6 +423,8 @@ async def maybe_schedule_bot_move() -> None:
         )
 
     async def _run_bot_move() -> None:
+        should_retry = False
+        should_schedule_next = False
         try:
             await asyncio.sleep(delay_sec)
             if manager.mode != MODE_HUMAN_VS_BOT or manager.game_over:
@@ -453,8 +462,7 @@ async def maybe_schedule_bot_move() -> None:
             except ValueError:
                 # Recover from rare stale/invalid proposals by immediately retrying.
                 manager.bot_turn_nonce += 1
-                manager.bot_move_task = None
-                await maybe_schedule_bot_move()
+                should_retry = True
                 return
             manager.bot_pending_decision = decision
             await broadcast_pending_flags()
@@ -463,15 +471,22 @@ async def maybe_schedule_bot_move() -> None:
                 summary = commit_turn(manager.state)
                 committed_decision = manager.bot_pending_decision
                 manager.bot_pending_decision = None
-                await finalize_bot_commit(summary, committed_decision)
+                should_schedule_next = await finalize_bot_commit(
+                    summary,
+                    committed_decision,
+                    schedule_next=False,
+                )
         except asyncio.CancelledError:
             return
         except Exception:
             manager.bot_turn_nonce += 1
-            manager.bot_move_task = None
-            await maybe_schedule_bot_move()
+            should_retry = True
         finally:
-            manager.bot_move_task = None
+            current_task = asyncio.current_task()
+            if manager.bot_move_task is current_task:
+                manager.bot_move_task = None
+            if should_retry or should_schedule_next:
+                await maybe_schedule_bot_move()
 
     manager.bot_move_task = asyncio.create_task(_run_bot_move())
 

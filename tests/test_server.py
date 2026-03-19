@@ -600,6 +600,36 @@ def test_human_vs_bot_bot_recovers_when_decision_raises(monkeypatch):
     manager.reset()
 
 
+def test_human_vs_bot_bot_reopens_next_turn_after_human_moved_first(monkeypatch):
+    manager.reset()
+    client = TestClient(app)
+    monkeypatch.setenv("WHISK_BOT_DELAY_MIN_SEC", "0")
+    monkeypatch.setenv("WHISK_BOT_DELAY_MAX_SEC", "0")
+    monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot", "bot_seed": 321})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        # Human moves first this turn; bot replies and commits turn 1.
+        ws_o.send_json({"type": "move", "row": 0, "col": 0})
+        _recv_state_where(ws_o, lambda s: s["turn"] == 1)
+        _recv_type(ws_o, "turn_committed")
+
+        # Bot should still be able to open the next turn automatically.
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if manager.state.turn == 1 and manager.state.pending[Mark.O] is None and manager.state.pending[Mark.X] is not None:
+                break
+            time.sleep(0.01)
+        assert manager.state.turn == 1
+        assert manager.state.pending[Mark.O] is None
+        assert manager.state.pending[Mark.X] is not None
+
+    manager.reset()
+
+
 def test_second_player_cannot_join_active_human_vs_bot_game():
     manager.reset()
     client = TestClient(app)
