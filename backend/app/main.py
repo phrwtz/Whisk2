@@ -17,7 +17,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 from .game import (
+    BOARD_SIZE,
     GameState,
     Mark,
     apply_move,
@@ -46,6 +47,16 @@ MODE_DEMO = "demo"
 LEGACY_MODE_BOT = "bot"
 VALID_MODES = {MODE_REMOTE, MODE_LOCAL, MODE_HUMAN_VS_BOT, MODE_DEMO}
 BOT_SEED_MOD = 2_147_483_647
+_SYMMETRY_INVERSE = {
+    0: 0,  # identity
+    1: 3,  # rot90 -> rot270
+    2: 2,  # rot180
+    3: 1,  # rot270 -> rot90
+    4: 4,  # mirror left-right
+    5: 5,  # mirror top-bottom
+    6: 6,  # main diagonal
+    7: 7,  # anti-diagonal
+}
 
 
 def fresh_bot_seed() -> int:
@@ -324,6 +335,42 @@ def _env_float(name: str, default: float, min_value: float, max_value: float) ->
     return max(min_value, min(max_value, value))
 
 
+def _transform_coord(coord: Tuple[int, int], symmetry: int) -> Tuple[int, int]:
+    r, c = coord
+    n = BOARD_SIZE - 1
+    if symmetry == 0:
+        return (r, c)
+    if symmetry == 1:
+        return (c, n - r)
+    if symmetry == 2:
+        return (n - r, n - c)
+    if symmetry == 3:
+        return (n - c, r)
+    if symmetry == 4:
+        return (r, n - c)
+    if symmetry == 5:
+        return (n - r, c)
+    if symmetry == 6:
+        return (c, r)
+    if symmetry == 7:
+        return (n - c, n - r)
+    raise ValueError("Invalid symmetry index")
+
+
+def _transform_state_for_symmetry(state: GameState, symmetry: int) -> GameState:
+    transformed = deepcopy(state)
+    for mark in (Mark.O, Mark.X):
+        for piece in transformed.pieces[mark]:
+            piece.row, piece.col = _transform_coord((piece.row, piece.col), symmetry)
+        pending = transformed.pending[mark]
+        if pending is not None:
+            transformed.pending[mark] = _transform_coord(pending, symmetry)
+    transformed.last_highlighted_cells = {
+        _transform_coord(coord, symmetry) for coord in transformed.last_highlighted_cells
+    }
+    return transformed
+
+
 def normalize_mode(raw: object) -> Optional[str]:
     if not isinstance(raw, str):
         return None
@@ -571,14 +618,34 @@ async def maybe_schedule_demo_move() -> None:
             if expected_turn < 2:
                 decision = _random_demo_decision(moving_mark)
             else:
-                state_snapshot = deepcopy(manager.state)
+                symmetry = manager.bot_session.rng.randrange(8)
+                state_snapshot = _transform_state_for_symmetry(manager.state, symmetry)
                 try:
-                    decision = await asyncio.wait_for(
+                    transformed_decision = await asyncio.wait_for(
                         asyncio.to_thread(manager.bot_session.choose_decision, state_snapshot, moving_mark),
                         timeout=decision_timeout_sec,
                     )
                 except Exception:
                     decision = _fallback_bot_decision(moving_mark)
+                else:
+                    inverse = _SYMMETRY_INVERSE[symmetry]
+                    row, col = _transform_coord(
+                        (transformed_decision.row, transformed_decision.col), inverse
+                    )
+                    decision = BotDecision(
+                        row=row,
+                        col=col,
+                        source=f"{transformed_decision.source}_sym",
+                        candidates=[
+                            BotCandidate(
+                                row=rr,
+                                col=cc,
+                                score=cand.score,
+                            )
+                            for cand in transformed_decision.candidates
+                            for rr, cc in [_transform_coord((cand.row, cand.col), inverse)]
+                        ],
+                    )
 
             if manager.mode != MODE_DEMO or manager.game_over:
                 return
