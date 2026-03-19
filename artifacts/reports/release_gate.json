@@ -11,13 +11,13 @@
   "checks": [
     {
       "name": "min_generations",
-      "actual": 45,
+      "actual": 46,
       "required": 3,
       "passed": true
     },
     {
       "name": "min_promotion_rate",
-      "actual": 0.28888888888888886,
+      "actual": 0.30434782608695654,
       "required": 0.4,
       "passed": false
     },
@@ -35,16 +35,16 @@
     },
     {
       "name": "min_latest_replay_size",
-      "actual": 16034,
+      "actual": 322,
       "required": 100,
       "passed": true
     }
   ],
   "summary": {
-    "total_generations": 45,
-    "promotion_rate": 0.28888888888888886,
+    "total_generations": 46,
+    "promotion_rate": 0.30434782608695654,
     "latest_candidate_vs_random": 1.0,
     "best_candidate_vs_random": 1.0,
-    "latest_replay_size": 16034
+    "latest_replay_size": 322
   }
 }
