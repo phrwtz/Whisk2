@@ -646,6 +646,49 @@ def test_second_player_cannot_join_active_human_vs_bot_game():
     manager.reset()
 
 
+def test_demo_mode_autoplays_and_rejects_manual_moves(monkeypatch):
+    manager.reset()
+    client = TestClient(app)
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.01")
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.01")
+    monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Viewer", "mode": "demo"})
+        joined = _recv_type(ws_o, "joined")
+        assert joined["mark"] == "O"
+
+        init_state = _recv_type(ws_o, "state")
+        assert init_state["mode"] == "demo"
+
+        ws_o.send_json({"type": "move", "row": 0, "col": 0})
+        err = _recv_type(ws_o, "error", max_messages=40)
+        assert err["message"] == "Demo mode is autoplay only."
+
+        auto_state = _recv_state_where(ws_o, lambda s: s["mode"] == "demo" and s["turn"] >= 1)
+        assert auto_state["pending"] == {"O": False, "X": False}
+        assert auto_state["local_next_mark"] in ("O", "X")
+        assert len(auto_state["pieces"]) >= 1
+
+    manager.reset()
+
+
+def test_second_player_cannot_join_active_demo_game():
+    manager.reset()
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws_o, client.websocket_connect("/ws") as ws_x:
+        ws_o.send_json({"type": "join", "name": "Viewer", "mode": "demo"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        ws_x.send_json({"type": "join", "name": "Guest", "mode": "remote"})
+        err = _recv_type(ws_x, "error")
+        assert err["message"] == "A demo is already in progress."
+
+    manager.reset()
+
+
 def test_human_vs_bot_join_evicts_leftover_x_and_lobby_sockets():
     manager.reset()
     client = TestClient(app)
