@@ -71,6 +71,9 @@ class HumanVsAgentSession:
         self.opening_two_ply_weight = self._env_float(
             "WHISK_BOT_OPENING_2PLY_WEIGHT", 0.45, min_value=0.0, max_value=2.0
         )
+        self.argmax_tie_tol = self._env_float(
+            "WHISK_BOT_ARGMAX_TIE_TOL", 1e-6, min_value=0.0, max_value=0.1
+        )
         self.move_time_limit_sec = self._env_float(
             "WHISK_BOT_MOVE_TIME_LIMIT_SEC", 10.0, min_value=0.2, max_value=60.0
         )
@@ -96,6 +99,7 @@ class HumanVsAgentSession:
 
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
+        self.rng.shuffle(legal_ids)
         must_block_ids = self._must_block_imminent_five_ids(
             env, bot_mark, opponent, legal_ids, deadline=deadline
         )
@@ -106,7 +110,7 @@ class HumanVsAgentSession:
                 priors, _ = self.model.predict(obs)
                 for action_id in must_block_ids:
                     scores[action_id] = float(priors[action_id])
-            chosen_id = max(scores, key=scores.get)
+            chosen_id = self._argmax_with_random_tie_break(scores)
             return self._build_decision(chosen_id, "must_block", scores)
 
         if self.opening_tactical_enabled and state.pending[opponent] is None and self._is_opening_phase(state):
@@ -222,7 +226,7 @@ class HumanVsAgentSession:
 
         if not scores:
             return None
-        chosen_id = max(scores, key=scores.get)
+        chosen_id = self._argmax_with_random_tie_break(scores)
         return self._build_decision(chosen_id, "opening_tactical", scores)
 
     def _opening_two_ply_worst_case(
@@ -366,9 +370,19 @@ class HumanVsAgentSession:
         scores = self._apply_pending_immediate_five_safety_filter(
             env, bot_mark, scores, deadline=deadline
         )
-        chosen_id = max(scores, key=scores.get)
+        chosen_id = self._argmax_with_random_tie_break(scores)
         # Keep source stable for frontend handling.
         return self._build_decision(chosen_id, "opening_tactical", scores)
+
+    def _argmax_with_random_tie_break(self, scores: Dict[int, float]) -> int:
+        if not scores:
+            raise RuntimeError("No candidate scores available for argmax")
+        best = max(scores.values())
+        tol = max(0.0, self.argmax_tie_tol)
+        tied = [action_id for action_id, value in scores.items() if value >= best - tol]
+        if len(tied) == 1:
+            return tied[0]
+        return self.rng.choice(tied)
 
     def _choose_pending_lookahead(
         self,
