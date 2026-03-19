@@ -10,7 +10,9 @@ Server responsibilities:
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
+import os
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -33,7 +35,8 @@ from .game import (
     ready_to_commit,
     scores_for_client,
 )
-from .agents.human_adapter import HumanVsAgentSession
+from .agents.env import WhiskEnv
+from .agents.human_adapter import BotCandidate, BotDecision, HumanVsAgentSession
 
 # -------------------------------------------------------------------
 MODE_REMOTE = "remote"
@@ -288,6 +291,17 @@ def parse_player_name(raw: object, default: str) -> str:
     return name or default
 
 
+def _env_float(name: str, default: float, min_value: float, max_value: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(max_value, value))
+
+
 def normalize_mode(raw: object) -> Optional[str]:
     if not isinstance(raw, str):
         return None
@@ -359,9 +373,30 @@ async def maybe_schedule_bot_move() -> None:
     if manager.bot_session is None:
         manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
 
+    delay_min = _env_float("WHISK_BOT_DELAY_MIN_SEC", 1.0, min_value=0.0, max_value=10.0)
+    delay_max = _env_float("WHISK_BOT_DELAY_MAX_SEC", 5.0, min_value=0.0, max_value=30.0)
+    if delay_max < delay_min:
+        delay_max = delay_min
+    decision_timeout_sec = _env_float(
+        "WHISK_BOT_DECISION_TIMEOUT_SEC", 12.0, min_value=0.2, max_value=120.0
+    )
+
     expected_turn = manager.state.turn
     expected_nonce = manager.bot_turn_nonce
-    delay_sec = manager.bot_session.rng.uniform(1.0, 5.0)
+    delay_sec = manager.bot_session.rng.uniform(delay_min, delay_max)
+
+    def _fallback_bot_decision() -> BotDecision:
+        if manager.bot_session is None:
+            manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
+        env = WhiskEnv(mode="remote")
+        env.state = deepcopy(manager.state)
+        row, col = manager.bot_session.greedy.select_action(env, Mark.X, manager.bot_session.rng)
+        return BotDecision(
+            row=row,
+            col=col,
+            source="fallback_greedy",
+            candidates=[BotCandidate(row=row, col=col, score=1.0)],
+        )
 
     async def _run_bot_move() -> None:
         try:
@@ -377,8 +412,33 @@ async def maybe_schedule_bot_move() -> None:
             if manager.bot_session is None:
                 manager.bot_session = HumanVsAgentSession(seed=manager.bot_seed)
 
-            decision = manager.bot_session.choose_decision(manager.state, Mark.X)
-            apply_move(manager.state, Mark.X, decision.row, decision.col)
+            state_snapshot = deepcopy(manager.state)
+            try:
+                decision = await asyncio.wait_for(
+                    asyncio.to_thread(manager.bot_session.choose_decision, state_snapshot, Mark.X),
+                    timeout=decision_timeout_sec,
+                )
+            except Exception:
+                decision = _fallback_bot_decision()
+
+            # Re-check state after background compute in case the turn changed.
+            if manager.mode != MODE_HUMAN_VS_BOT or manager.game_over:
+                return
+            if Mark.O not in manager.players:
+                return
+            if manager.bot_turn_nonce != expected_nonce or manager.state.turn != expected_turn:
+                return
+            if manager.state.pending[Mark.X] is not None:
+                return
+
+            try:
+                apply_move(manager.state, Mark.X, decision.row, decision.col)
+            except ValueError:
+                # Recover from rare stale/invalid proposals by immediately retrying.
+                manager.bot_turn_nonce += 1
+                manager.bot_move_task = None
+                await maybe_schedule_bot_move()
+                return
             manager.bot_pending_decision = decision
             await broadcast_pending_flags()
 
@@ -389,8 +449,10 @@ async def maybe_schedule_bot_move() -> None:
                 await finalize_bot_commit(summary, committed_decision)
         except asyncio.CancelledError:
             return
-        except ValueError:
-            return
+        except Exception:
+            manager.bot_turn_nonce += 1
+            manager.bot_move_task = None
+            await maybe_schedule_bot_move()
         finally:
             manager.bot_move_task = None
 

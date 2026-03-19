@@ -577,6 +577,29 @@ def test_human_vs_bot_bot_can_move_first_after_delay():
     manager.reset()
 
 
+def test_human_vs_bot_bot_recovers_when_decision_raises(monkeypatch):
+    manager.reset()
+    client = TestClient(app)
+    monkeypatch.setenv("WHISK_BOT_DELAY_MIN_SEC", "0")
+    monkeypatch.setenv("WHISK_BOT_DELAY_MAX_SEC", "0")
+    monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+
+    def boom(self, state, bot_mark):
+        raise RuntimeError("forced bot decision failure")
+
+    monkeypatch.setattr(HumanVsAgentSession, "choose_decision", boom)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Human", "mode": "human_vs_bot"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        pending = _recv_pending_flags(ws_o, max_messages=40)
+        assert pending["pending"]["X"] is True
+
+    manager.reset()
+
+
 def test_second_player_cannot_join_active_human_vs_bot_game():
     manager.reset()
     client = TestClient(app)
@@ -606,7 +629,15 @@ def test_bot_mode_sends_explanation_event():
         msgs = _recv_until_type(ws, "turn_committed")
         explanation = next((m for m in msgs if m.get("type") == "bot_explanation"), None)
         assert explanation is not None
-        assert explanation["source"] in ("must_block", "opening_tactical", "model_lookahead", "model_prior", "mcts", "greedy")
+        assert explanation["source"] in (
+            "must_block",
+            "opening_tactical",
+            "model_lookahead",
+            "model_prior",
+            "mcts",
+            "greedy",
+            "fallback_greedy",
+        )
         assert "chosen" in explanation and "row" in explanation["chosen"] and "col" in explanation["chosen"]
         assert isinstance(explanation.get("candidates"), list)
 
