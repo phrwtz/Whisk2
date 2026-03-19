@@ -1,0 +1,7 @@
+Whisk is a variant of Tic Tac Toe with some important differences. For one thing, it is played on an 8 by 8, rather than a 3 by 3, board.
+Players place their icon, either X or O, on the board by selecting a square and clicking on it. They receive points for getting 3, 4, or 5 of their icons in a row: 1 point for 3 in a row, 4 points for 4 in a row, and 9 points for 5 in a row. Neither player can get more than 5 icons in a row due to a unique feature of Whisk: when a player places a sixth icon on the board, the oldest icon of that kind disappears, leaving just the five most recent ones. As a visual reminder of this, the icons fade progressively as new ones are placed.
+You are playing the game in local mode, meaning that both players are on the same computer (or you may play the game against yourself, of course). Players alternate moves by clicking on empty squares to place their icon; O goes first. You are asked to enter your names before beginning play. This will help the game to remind you whose turn it is.
+The game ends when either player gets 50 or more points.
+
+
+

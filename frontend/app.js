@@ -114,6 +114,36 @@ const BOT_INSTRUCTIONS = [
   'Click on "Join" to start a bot game.',
 ];
 
+const instructionCache = {};
+
+function fallbackInstructions(mode) {
+  if (mode === MODE_LOCAL) return LOCAL_INSTRUCTIONS;
+  if (mode === MODE_HUMAN_VS_BOT) return BOT_INSTRUCTIONS;
+  return REMOTE_INSTRUCTIONS;
+}
+
+async function instructionLinesForMode(mode) {
+  if (instructionCache[mode]) return instructionCache[mode];
+  try {
+    const res = await fetch(`/instructions/${encodeURIComponent(mode)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.text();
+    const parsed = raw
+      .split(/\r?\n\r?\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (parsed.length > 0) {
+      instructionCache[mode] = parsed;
+      return parsed;
+    }
+  } catch (_) {
+    // Fall back to bundled text below.
+  }
+  const fallback = fallbackInstructions(mode);
+  instructionCache[mode] = fallback;
+  return fallback;
+}
+
 const WIN_VIDEO_URL = '/static/media/Win!.mp4';
 const TIE_VIDEO_URL = '/static/media/Tie!.mp4';
 
@@ -262,7 +292,7 @@ function setStatusHtml(html) {
   messagesEl.innerHTML = html;
 }
 
-function openInstructionsModal() {
+async function openInstructionsModal() {
   if (!instructionsModalEl || !instructionsTitleEl || !instructionsBodyEl) return;
   const activeMode = instructionsMode();
   if (!activeMode) {
@@ -279,9 +309,7 @@ function openInstructionsModal() {
   }
   const isLocal = activeMode === MODE_LOCAL;
   const isHumanVsBot = activeMode === MODE_HUMAN_VS_BOT;
-  const lines = isLocal
-    ? LOCAL_INSTRUCTIONS
-    : (isHumanVsBot ? BOT_INSTRUCTIONS : REMOTE_INSTRUCTIONS);
+  const lines = await instructionLinesForMode(activeMode);
   instructionsTitleEl.textContent = isLocal
     ? 'Local Mode Instructions'
     : (isHumanVsBot ? 'Play Against Computer Instructions' : 'Remote Mode Instructions');
@@ -534,10 +562,9 @@ function maybeShowScoreFlashFromState(prevScores, nextScores) {
 }
 
 function showGameOverMedia(kind, text, options = {}) {
-  const loop = options.loop !== false;
-  const durationMs = Number.isFinite(options.durationMs) ? Number(options.durationMs) : 5000;
+  const loop = options.loop === true;
   const src = (kind === 'tie') ? TIE_VIDEO_URL : WIN_VIDEO_URL;
-  gameOverMediaUntil = Date.now() + durationMs;
+  gameOverMediaUntil = Number.POSITIVE_INFINITY;
   setStatusHtml(
     `<div class="gameover-row">` +
     `<div class="gameover-text">${escapeHtml(text)}</div>` +
@@ -552,11 +579,6 @@ function showGameOverMedia(kind, text, options = {}) {
       window.setTimeout(options.onEnded, 9000);
     }
   }
-  window.setTimeout(() => {
-    if (!isGameOver) return;
-    if (Date.now() < gameOverMediaUntil) return;
-    setStatusMessage('Game over...');
-  }, durationMs);
 }
 
 function formatBotExplanation(msg) {
@@ -1054,6 +1076,9 @@ function handleMessage(msg) {
 
       if (typeof msg.game_over === 'boolean') {
         isGameOver = msg.game_over;
+        if (!isGameOver) {
+          gameOverMediaUntil = 0;
+        }
       }
 
       if (msg.pieces) {

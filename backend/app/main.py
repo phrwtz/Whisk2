@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
@@ -135,6 +135,12 @@ class GameManager:
 app = FastAPI(title="Whisk")
 manager = GameManager()
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+ROOT_DIR = Path(__file__).resolve().parents[2]
+INSTRUCTIONS_PATHS = {
+    MODE_LOCAL: ROOT_DIR / "local instructions.txt",
+    MODE_REMOTE: ROOT_DIR / "remote instructions.txt",
+    MODE_HUMAN_VS_BOT: ROOT_DIR / "human_vs_bot_instructions.txt",
+}
 
 # Serve frontend assets from repo frontend directory.
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
@@ -144,6 +150,17 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 async def index() -> HTMLResponse:
     with open(FRONTEND_DIR / "index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+
+
+@app.get("/instructions/{mode}")
+async def instructions(mode: str) -> PlainTextResponse:
+    normalized = normalize_mode(mode)
+    if normalized not in INSTRUCTIONS_PATHS:
+        raise HTTPException(status_code=404, detail="Unknown mode")
+    path = INSTRUCTIONS_PATHS[normalized]
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Instructions file missing")
+    return PlainTextResponse(path.read_text(encoding="utf-8"))
 
 
 async def send_state(to_ws: WebSocket, viewer_mark: Optional[Mark] = None, refresh: bool = False) -> None:
