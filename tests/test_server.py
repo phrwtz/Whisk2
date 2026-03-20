@@ -692,8 +692,8 @@ def test_second_player_cannot_join_active_demo_game():
 def test_demo_mode_first_two_moves_random_then_model(monkeypatch):
     manager.reset()
     client = TestClient(app)
-    monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.01")
-    monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.01")
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.05")
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.05")
     monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
 
     calls = {"n": 0}
@@ -745,6 +745,8 @@ def test_demo_mode_move_log_cleared_on_game_over(monkeypatch):
     monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.01")
     monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.01")
     monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+    import backend.app.main as main_mod
+    monkeypatch.setattr(main_mod, "_demo_rebalance_decision", lambda _mark, decision: decision)
 
     # Start from a near-win state and skip the random-opening branch.
     manager.state.turn = 2

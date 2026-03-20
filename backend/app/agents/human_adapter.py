@@ -401,7 +401,6 @@ class HumanVsAgentSession:
         self.rng.shuffle(ordered)
         ordered.sort(key=lambda i: priors[i], reverse=True)
         candidate_ids = ordered[: min(len(ordered), self.pending_eval_top_k)]
-        self.rng.shuffle(candidate_ids)
 
         for action_id in candidate_ids:
             if deadline is not None and time.perf_counter() >= deadline:
@@ -427,7 +426,7 @@ class HumanVsAgentSession:
         scores = self._apply_pending_immediate_five_safety_filter(
             env, bot_mark, scores, deadline=deadline
         )
-        chosen_id = self._sample_action_from_scores(scores)
+        chosen_id = self._argmax_with_random_tie_break(scores)
         return self._build_decision(chosen_id, "model_lookahead", scores)
 
     def _apply_pending_immediate_five_safety_filter(

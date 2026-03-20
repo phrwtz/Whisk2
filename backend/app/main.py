@@ -118,6 +118,7 @@ class GameManager:
         entry_count = len(self.demo_move_log)
         if entry_count > 0:
             logger.info("demo_move_log_cleared entries=%s reason=%s", entry_count, reason)
+            print(f"demo_move_log_cleared entries={entry_count} reason={reason}", flush=True)
         self.demo_move_log.clear()
 
     def is_full(self) -> bool:
@@ -759,6 +760,7 @@ async def maybe_schedule_demo_move() -> None:
             )
             manager.demo_move_log.append(move_log_entry)
             logger.info("demo_move %s", move_log_entry)
+            print(f"demo_move {move_log_entry}", flush=True)
 
             manager.local_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
             await broadcast_state(refresh=True)

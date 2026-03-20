@@ -14,3 +14,8 @@ node_modules/
 /Win!.mp4
 /Tie.mp4
 /Tie!.mp4
+
+# Training/debug artifacts (runtime release artifacts stay tracked under artifacts/releases)
+/artifacts/checkpoints/
+/artifacts/reports/
+/artifacts/smoke_transitions.jsonl
