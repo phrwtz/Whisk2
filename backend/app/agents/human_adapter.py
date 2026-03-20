@@ -128,6 +128,7 @@ class HumanVsAgentSession:
         if self.model is not None:
             obs = StateEncoder.encode_observation(env.state, bot_mark)
             legal_ids = [i for i, bit in enumerate(obs["legal_action_mask"]) if bit]
+            self.rng.shuffle(legal_ids)
             if legal_ids:
                 # In Human-vs-Bot mode, the human's pending move is known at this point.
                 # Evaluate each legal bot response by committing the pending turn.
@@ -396,8 +397,11 @@ class HumanVsAgentSession:
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         priors, _ = self.model.predict(obs)
         scores: Dict[int, float] = {}
-        ordered = sorted(legal_ids, key=lambda i: priors[i], reverse=True)
+        ordered = list(legal_ids)
+        self.rng.shuffle(ordered)
+        ordered.sort(key=lambda i: priors[i], reverse=True)
         candidate_ids = ordered[: min(len(ordered), self.pending_eval_top_k)]
+        self.rng.shuffle(candidate_ids)
 
         for action_id in candidate_ids:
             if deadline is not None and time.perf_counter() >= deadline:

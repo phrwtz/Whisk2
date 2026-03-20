@@ -12,12 +12,14 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import json
+import logging
+import math
 import os
 import secrets
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -36,6 +38,7 @@ from .game import (
     scores_for_client,
 )
 from .agents.env import WhiskEnv
+from .agents.encoding import ActionCodec, StateEncoder
 from .agents.human_adapter import BotCandidate, BotDecision, HumanVsAgentSession
 
 # -------------------------------------------------------------------
@@ -46,6 +49,7 @@ MODE_DEMO = "demo"
 LEGACY_MODE_BOT = "bot"
 VALID_MODES = {MODE_REMOTE, MODE_LOCAL, MODE_HUMAN_VS_BOT, MODE_DEMO}
 BOT_SEED_MOD = 2_147_483_647
+logger = logging.getLogger("whiskbot")
 
 
 def fresh_bot_seed() -> int:
@@ -73,6 +77,7 @@ class GameManager:
         self.cancel_bot_move_task()
         self.bot_pending_decision = None
         self.bot_turn_nonce += 1
+        self.clear_demo_move_log(reason="reset_game_state_only")
         self.state = GameState()
         self.game_over = False
         self.local_next_mark = Mark.O
@@ -85,6 +90,10 @@ class GameManager:
     def reset(self) -> None:
         if hasattr(self, "bot_move_task"):
             self.cancel_bot_move_task()
+        if hasattr(self, "demo_move_log"):
+            self.clear_demo_move_log(reason="reset")
+        else:
+            self.demo_move_log: List[str] = []
         self.state = GameState()
         self.players: Dict[Mark, PlayerConn] = {}
         self.ws_to_mark: Dict[str, Mark] = {}
@@ -104,6 +113,12 @@ class GameManager:
             Mark.O: "Player O",
             Mark.X: "Player X",
         }
+
+    def clear_demo_move_log(self, *, reason: str) -> None:
+        entry_count = len(self.demo_move_log)
+        if entry_count > 0:
+            logger.info("demo_move_log_cleared entries=%s reason=%s", entry_count, reason)
+        self.demo_move_log.clear()
 
     def is_full(self) -> bool:
         return Mark.O in self.players and Mark.X in self.players
@@ -322,6 +337,140 @@ def _env_float(name: str, default: float, min_value: float, max_value: float) ->
     except (TypeError, ValueError):
         return default
     return max(min_value, min(max_value, value))
+
+
+def _sample_action_from_scores(
+    scores: Dict[int, float],
+    *,
+    rng,
+    temperature: float,
+    top_k: int,
+) -> int:
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    if not ranked:
+        raise RuntimeError("No candidate scores")
+    shortlist = ranked[: min(len(ranked), max(1, top_k))]
+    if len(shortlist) == 1:
+        return shortlist[0][0]
+    max_score = shortlist[0][1]
+    temp = max(0.01, temperature)
+    weights = [math.exp((score - max_score) / temp) for _, score in shortlist]
+    total = sum(weights)
+    if total <= 0:
+        return rng.choice([action_id for action_id, _ in shortlist])
+    target = rng.random() * total
+    accum = 0.0
+    for (action_id, _), weight in zip(shortlist, weights):
+        accum += weight
+        if accum >= target:
+            return action_id
+    return shortlist[-1][0]
+
+
+def _demo_rebalance_decision(mark: Mark, base_decision: BotDecision) -> BotDecision:
+    """Reduce demo-mode spatial collapse while still using model guidance."""
+    if manager.bot_session is None:
+        return base_decision
+
+    env = WhiskEnv(mode="remote")
+    env.state = deepcopy(manager.state)
+    legal = env.legal_actions(mark)
+    if not legal:
+        return base_decision
+
+    priors = None
+    if manager.bot_session.model is not None:
+        obs = StateEncoder.encode_observation(env.state, mark)
+        priors, _ = manager.bot_session.model.predict(obs)
+    occ = manager.state.board_occupancy()
+    row_counts = [0] * 8
+    col_counts = [0] * 8
+    for r, c in occ:
+        row_counts[r] += 1
+        col_counts[c] += 1
+    total_occ = max(1, len(occ))
+    max_row = max(row_counts) if row_counts else 0
+    max_col = max(col_counts) if col_counts else 0
+    min_row = min(row_counts) if row_counts else 0
+    min_col = min(col_counts) if col_counts else 0
+    base_coord = (base_decision.row, base_decision.col)
+    candidate_hint = {
+        ActionCodec.coord_to_action(c.row, c.col): float(c.score)
+        for c in base_decision.candidates
+    }
+    hint_min = min(candidate_hint.values()) if candidate_hint else 0.0
+    hint_max = max(candidate_hint.values()) if candidate_hint else 1.0
+
+    # When occupancy is imbalanced, force consideration of underused rows/cols.
+    filtered_legal = list(legal)
+    if total_occ >= 6:
+        scarce = [
+            (r, c)
+            for r, c in legal
+            if row_counts[r] <= (min_row + 1) and col_counts[c] <= (min_col + 1)
+        ]
+        if len(scarce) >= 6:
+            filtered_legal = scarce
+
+    scores: Dict[int, float] = {}
+    for r, c in filtered_legal:
+        action_id = ActionCodec.coord_to_action(r, c)
+        prior = float(priors[action_id]) if priors is not None else (1.0 / len(filtered_legal))
+        if hint_max > hint_min:
+            hint = (candidate_hint.get(action_id, hint_min) - hint_min) / (hint_max - hint_min)
+        elif action_id in candidate_hint:
+            hint = 1.0
+        else:
+            hint = 0.0
+        center = 1.0 - (((r - 3.5) ** 2 + (c - 3.5) ** 2) / 24.5)
+        crowd = (row_counts[r] + col_counts[c]) / (2.0 * total_occ)
+        row_underuse = ((max_row - row_counts[r]) / max(1, max_row)) if max_row > 0 else 1.0
+        col_underuse = ((max_col - col_counts[c]) / max(1, max_col)) if max_col > 0 else 1.0
+        local_neighbors = 0
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                rr = r + dr
+                cc = c + dc
+                if 0 <= rr < 8 and 0 <= cc < 8 and (rr, cc) in occ:
+                    local_neighbors += 1
+        density = local_neighbors / 8.0
+        base_bonus = 0.02 if (r, c) == base_coord else 0.0
+        jitter = manager.bot_session.rng.uniform(-0.01, 0.01)
+        scores[action_id] = (
+            (0.42 * prior)
+            + (0.18 * hint)
+            + (0.16 * center)
+            + (0.20 * row_underuse)
+            + (0.20 * col_underuse)
+            - (0.28 * crowd)
+            - (0.15 * density)
+            + base_bonus
+            + jitter
+        )
+
+    chosen_id = _sample_action_from_scores(
+        scores,
+        rng=manager.bot_session.rng,
+        temperature=_env_float("WHISK_DEMO_SELECT_TEMP", 0.32, min_value=0.05, max_value=2.0),
+        top_k=int(_env_float("WHISK_DEMO_SELECT_TOP_K", 14.0, min_value=1.0, max_value=32.0)),
+    )
+    chosen_row, chosen_col = ActionCodec.action_to_coord(chosen_id)
+    top = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    return BotDecision(
+        row=chosen_row,
+        col=chosen_col,
+        source=f"{base_decision.source}_demo",
+        candidates=[
+            BotCandidate(
+                row=ActionCodec.action_to_coord(i)[0],
+                col=ActionCodec.action_to_coord(i)[1],
+                score=float(score),
+            )
+            for i, score in top
+        ],
+    )
 
 
 def normalize_mode(raw: object) -> Optional[str]:
@@ -579,6 +728,7 @@ async def maybe_schedule_demo_move() -> None:
                     )
                 except Exception:
                     decision = _fallback_bot_decision(moving_mark)
+                decision = _demo_rebalance_decision(moving_mark, decision)
 
             if manager.mode != MODE_DEMO or manager.game_over:
                 return
@@ -598,6 +748,17 @@ async def maybe_schedule_demo_move() -> None:
                 manager.bot_turn_nonce += 1
                 should_retry = True
                 return
+
+            added = summary.get("added", {})
+            add_o = int(added.get("O", 0)) if isinstance(added, dict) else 0
+            add_x = int(added.get("X", 0)) if isinstance(added, dict) else 0
+            move_log_entry = (
+                f"turn={manager.state.turn} mark={moving_mark.value} row={decision.row} "
+                f"col={decision.col} source={decision.source} add_o={add_o} add_x={add_x} "
+                f"score_o={manager.state.scores[Mark.O]} score_x={manager.state.scores[Mark.X]}"
+            )
+            manager.demo_move_log.append(move_log_entry)
+            logger.info("demo_move %s", move_log_entry)
 
             manager.local_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
             await broadcast_state(refresh=True)
@@ -620,6 +781,7 @@ async def maybe_schedule_demo_move() -> None:
                     "message": game_over_message(winner_mark),
                     "winner": winner_mark,
                 })
+                manager.clear_demo_move_log(reason="game_over")
                 return
 
             manager.bot_turn_nonce += 1

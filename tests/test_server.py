@@ -739,6 +739,65 @@ def test_demo_mode_first_two_moves_random_then_model(monkeypatch):
     manager.reset()
 
 
+def test_demo_mode_move_log_cleared_on_game_over(monkeypatch):
+    manager.reset()
+    client = TestClient(app)
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.01")
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.01")
+    monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+
+    # Start from a near-win state and skip the random-opening branch.
+    manager.state.turn = 2
+    manager.local_next_mark = Mark.O
+    manager.state.scores[Mark.O] = 49
+    manager.state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    manager.state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+
+    calls = {"n": 0}
+
+    def quick_choose(self, state, bot_mark):
+        calls["n"] += 1
+        if bot_mark == Mark.O:
+            return BotDecision(
+                row=0,
+                col=2,
+                source="test_model",
+                candidates=[BotCandidate(row=0, col=2, score=1.0)],
+            )
+        occ = set(state.board_occupancy().keys())
+        reserved = state.reserved_squares()
+        for row in range(8):
+            for col in range(8):
+                coord = (row, col)
+                if coord in occ or coord in reserved:
+                    continue
+                return BotDecision(
+                    row=row,
+                    col=col,
+                    source="test_model",
+                    candidates=[BotCandidate(row=row, col=col, score=1.0)],
+                )
+        raise RuntimeError("No legal moves")
+
+    monkeypatch.setattr(HumanVsAgentSession, "choose_decision", quick_choose)
+
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Viewer", "mode": "demo"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not manager.game_over:
+            time.sleep(0.01)
+
+        assert manager.game_over is True
+        assert manager.state.scores[Mark.O] >= 50
+        assert calls["n"] >= 1
+        assert manager.demo_move_log == []
+
+    manager.reset()
+
+
 def test_human_vs_bot_join_evicts_leftover_x_and_lobby_sockets():
     manager.reset()
     client = TestClient(app)
