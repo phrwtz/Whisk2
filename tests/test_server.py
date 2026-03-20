@@ -739,6 +739,54 @@ def test_demo_mode_first_two_moves_random_then_model(monkeypatch):
     manager.reset()
 
 
+def test_demo_rebalance_keeps_immediate_scoring_move(tmp_path: Path):
+    manager.reset()
+    import backend.app.main as main_mod
+
+    state = GameState()
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    manager.state = state
+    manager.bot_session = HumanVsAgentSession(checkpoint_path=tmp_path / "missing.pkl", seed=1)
+
+    base = BotDecision(
+        row=0,
+        col=2,
+        source="test_model",
+        candidates=[BotCandidate(row=0, col=2, score=1.0)],
+    )
+    decision = main_mod._demo_rebalance_decision(Mark.O, base)
+
+    assert (decision.row, decision.col) == (0, 2)
+    assert "demo_tactical_own" in decision.source
+    manager.reset()
+
+
+def test_demo_rebalance_blocks_large_immediate_threat(tmp_path: Path):
+    manager.reset()
+    import backend.app.main as main_mod
+
+    state = GameState()
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=0, col=1, turn_placed=2))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=0, col=2, turn_placed=3))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=0, col=3, turn_placed=4))
+    manager.state = state
+    manager.bot_session = HumanVsAgentSession(checkpoint_path=tmp_path / "missing.pkl", seed=1)
+
+    base = BotDecision(
+        row=7,
+        col=7,
+        source="test_model",
+        candidates=[BotCandidate(row=7, col=7, score=1.0)],
+    )
+    decision = main_mod._demo_rebalance_decision(Mark.O, base)
+
+    assert (decision.row, decision.col) == (0, 4)
+    assert "demo_tactical_block" in decision.source
+    manager.reset()
+
+
 def test_demo_mode_move_log_cleared_on_game_over(monkeypatch):
     manager.reset()
     client = TestClient(app)

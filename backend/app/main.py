@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import secrets
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -379,10 +380,51 @@ def _demo_rebalance_decision(mark: Mark, base_decision: BotDecision) -> BotDecis
     if not legal:
         return base_decision
 
+    opponent = Mark.X if mark == Mark.O else Mark.O
     priors = None
     if manager.bot_session.model is not None:
         obs = StateEncoder.encode_observation(env.state, mark)
         priors, _ = manager.bot_session.model.predict(obs)
+
+    # Tactical guardrails first: never sacrifice immediate points, and proactively block
+    # large immediate opponent threats when a direct block exists.
+    immediate_by_action: Dict[int, int] = {}
+    for r, c in legal:
+        action_id = ActionCodec.coord_to_action(r, c)
+        immediate_by_action[action_id] = manager.bot_session._immediate_move_score(env, mark, (r, c))
+    own_best = max(immediate_by_action.values()) if immediate_by_action else 0
+    if own_best > 0:
+        best_ids = [action_id for action_id, score in immediate_by_action.items() if score == own_best]
+        base_id = ActionCodec.coord_to_action(base_decision.row, base_decision.col)
+        chosen_id = base_id if base_id in best_ids else best_ids[0]
+        chosen_row, chosen_col = ActionCodec.action_to_coord(chosen_id)
+        return BotDecision(
+            row=chosen_row,
+            col=chosen_col,
+            source=f"{base_decision.source}_demo_tactical_own",
+            candidates=base_decision.candidates,
+        )
+
+    opp_legal = env.legal_actions(opponent)
+    if opp_legal:
+        opp_immediate = {
+            coord: manager.bot_session._immediate_move_score(env, opponent, coord)
+            for coord in opp_legal
+        }
+        opp_best = max(opp_immediate.values()) if opp_immediate else 0
+        if opp_best >= 4:
+            threat_coords = {coord for coord, score in opp_immediate.items() if score == opp_best}
+            blocking = [coord for coord in legal if coord in threat_coords]
+            if blocking:
+                base_coord = (base_decision.row, base_decision.col)
+                chosen_coord = base_coord if base_coord in blocking else blocking[0]
+                return BotDecision(
+                    row=chosen_coord[0],
+                    col=chosen_coord[1],
+                    source=f"{base_decision.source}_demo_tactical_block",
+                    candidates=base_decision.candidates,
+                )
+
     occ = manager.state.board_occupancy()
     row_counts = [0] * 8
     col_counts = [0] * 8
@@ -437,26 +479,27 @@ def _demo_rebalance_decision(mark: Mark, base_decision: BotDecision) -> BotDecis
                 if 0 <= rr < 8 and 0 <= cc < 8 and (rr, cc) in occ:
                     local_neighbors += 1
         density = local_neighbors / 8.0
-        base_bonus = 0.02 if (r, c) == base_coord else 0.0
-        jitter = manager.bot_session.rng.uniform(-0.01, 0.01)
+        base_bonus = 0.04 if (r, c) == base_coord else 0.0
         scores[action_id] = (
-            (0.42 * prior)
-            + (0.18 * hint)
-            + (0.16 * center)
-            + (0.20 * row_underuse)
-            + (0.20 * col_underuse)
-            - (0.28 * crowd)
-            - (0.15 * density)
+            (0.58 * prior)
+            + (0.24 * hint)
+            + (0.10 * center)
+            + (0.08 * row_underuse)
+            + (0.08 * col_underuse)
+            - (0.10 * crowd)
+            - (0.08 * density)
             + base_bonus
-            + jitter
         )
-
-    chosen_id = _sample_action_from_scores(
-        scores,
-        rng=manager.bot_session.rng,
-        temperature=_env_float("WHISK_DEMO_SELECT_TEMP", 0.32, min_value=0.05, max_value=2.0),
-        top_k=int(_env_float("WHISK_DEMO_SELECT_TOP_K", 14.0, min_value=1.0, max_value=32.0)),
-    )
+    if not scores:
+        return base_decision
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    chosen_id = ranked[0][0]
+    base_id = ActionCodec.coord_to_action(base_decision.row, base_decision.col)
+    base_score = scores.get(base_id)
+    best_score = ranked[0][1]
+    # Only override the model when the rebalance signal is meaningfully stronger.
+    if base_score is not None and best_score <= base_score + 0.08:
+        chosen_id = base_id
     chosen_row, chosen_col = ActionCodec.action_to_coord(chosen_id)
     top = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:3]
     return BotDecision(
@@ -759,8 +802,24 @@ async def maybe_schedule_demo_move() -> None:
                 f"score_o={manager.state.scores[Mark.O]} score_x={manager.state.scores[Mark.X]}"
             )
             manager.demo_move_log.append(move_log_entry)
-            logger.info("demo_move %s", move_log_entry)
+            logger.warning("demo_move %s", move_log_entry)
             print(f"demo_move {move_log_entry}", flush=True)
+            print(f"demo_move {move_log_entry}", file=sys.stderr, flush=True)
+            await manager.broadcast(
+                {
+                    "type": "demo_move",
+                    "turn": manager.state.turn,
+                    "mark": moving_mark.value,
+                    "row": decision.row,
+                    "col": decision.col,
+                    "source": decision.source,
+                    "added": {"O": add_o, "X": add_x},
+                    "scores": {
+                        "O": int(manager.state.scores[Mark.O]),
+                        "X": int(manager.state.scores[Mark.X]),
+                    },
+                }
+            )
 
             manager.local_next_mark = Mark.X if moving_mark == Mark.O else Mark.O
             await broadcast_state(refresh=True)

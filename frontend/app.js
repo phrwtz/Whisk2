@@ -1036,6 +1036,21 @@ function handleMessage(msg) {
       }
       break;
 
+    case 'demo_move':
+      if (modeChosen === MODE_DEMO && typeof console !== 'undefined' && typeof console.info === 'function') {
+        const turn = Number.isFinite(msg?.turn) ? msg.turn : '?';
+        const mark = typeof msg?.mark === 'string' ? msg.mark : '?';
+        const row = Number.isFinite(msg?.row) ? msg.row : '?';
+        const col = Number.isFinite(msg?.col) ? msg.col : '?';
+        const source = msg?.source || 'unknown';
+        const oScore = Number.isFinite(msg?.scores?.O) ? msg.scores.O : '?';
+        const xScore = Number.isFinite(msg?.scores?.X) ? msg.scores.X : '?';
+        console.info(
+          `[Demo] turn=${turn} mark=${mark} move=(${row},${col}) source=${source} score=${oScore}-${xScore}`
+        );
+      }
+      break;
+
     case 'turn_committed':
       if (isGameOver && Date.now() < gameOverMediaUntil) break;
       // After commit, pending clears; state will follow.
