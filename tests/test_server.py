@@ -673,6 +673,32 @@ def test_demo_mode_autoplays_and_rejects_manual_moves(monkeypatch):
     manager.reset()
 
 
+def test_demo_mode_reconnect_preserves_state(monkeypatch):
+    manager.reset()
+    client = TestClient(app)
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MIN_SEC", "0.01")
+    monkeypatch.setenv("WHISK_DEMO_DELAY_MAX_SEC", "0.01")
+    monkeypatch.setenv("WHISK_BOT_DECISION_TIMEOUT_SEC", "1")
+
+    turn_before_disconnect = 0
+    with client.websocket_connect("/ws") as ws_o:
+        ws_o.send_json({"type": "join", "name": "Viewer", "mode": "demo"})
+        _recv_type(ws_o, "joined")
+        _recv_type(ws_o, "state")
+        progressed = _recv_state_where(ws_o, lambda s: s["mode"] == "demo" and s["turn"] >= 2, max_messages=80)
+        turn_before_disconnect = int(progressed["turn"])
+        assert turn_before_disconnect >= 2
+
+    with client.websocket_connect("/ws") as ws_o_rejoin:
+        ws_o_rejoin.send_json({"type": "join", "name": "Viewer", "mode": "demo"})
+        _recv_type(ws_o_rejoin, "joined")
+        resumed = _recv_state_where(ws_o_rejoin, lambda s: s["mode"] == "demo", max_messages=40)
+        assert int(resumed["turn"]) >= turn_before_disconnect
+        assert len(resumed["pieces"]) >= 1
+
+    manager.reset()
+
+
 def test_second_player_cannot_join_active_demo_game():
     manager.reset()
     client = TestClient(app)

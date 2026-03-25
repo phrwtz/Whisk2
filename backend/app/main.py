@@ -883,6 +883,16 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 requested_local_x_name = parse_player_name(msg.get("x_name"), "Player X")
 
                 manager.prune_disconnected()
+                if (
+                    not manager.players
+                    and manager.mode == MODE_DEMO
+                    and requested_mode in VALID_MODES
+                    and requested_mode != MODE_DEMO
+                ):
+                    # If the previous session was a demo-resume state, but the
+                    # next join asks for a different mode, start fresh.
+                    manager.reset()
+                    manager.lobby_clients[ws_id] = ws
                 if requested_mode in (MODE_HUMAN_VS_BOT, MODE_DEMO) and Mark.O not in manager.players:
                     evict_leftover_for_single_player_mode(ws_id)
 
@@ -1174,6 +1184,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
         manager.lobby_clients.pop(ws_id, None)
         mark = manager.ws_to_mark.pop(ws_id, None)
         if mark and mark in manager.players:
+            preserve_demo_state = manager.mode == MODE_DEMO
             del manager.players[mark]
             manager.state.pending[mark] = None
             if manager.mode in (MODE_HUMAN_VS_BOT, MODE_DEMO):
@@ -1182,7 +1193,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 manager.bot_turn_nonce += 1
             await broadcast_state()
             await broadcast_lobby()
-            manager.reset_on_next_join = True
+            manager.reset_on_next_join = not preserve_demo_state
 
         if not manager.players:
-            manager.reset()
+            if manager.mode != MODE_DEMO:
+                manager.reset()
