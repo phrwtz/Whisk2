@@ -58,6 +58,7 @@ let wsHeartbeatTimer = null;
 let demoReconnectTimer = null;
 let demoReconnectAttempts = 0;
 let demoAutoRejoinPending = false;
+let skipNextStateAnimations = false;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
 let selectedJoinMode = null;
@@ -942,31 +943,37 @@ function updatePreJoinUiFromLobby() {
 }
 
 function connect() {
-  ws = new WebSocket(wsUrl());
+  const socket = new WebSocket(wsUrl());
+  ws = socket;
 
-  ws.addEventListener('open', () => {
+  socket.addEventListener('open', () => {
+    if (ws !== socket) return;
+    clearDemoReconnectTimer();
+    demoReconnectAttempts = 0;
     statusEl.textContent = 'Connected.';
     startWsHeartbeat();
     send({ type: 'lobby' });
     if (demoAutoRejoinPending) {
       demoAutoRejoinPending = false;
-      demoReconnectAttempts = 0;
       if (selectedJoinMode !== MODE_DEMO) selectedJoinMode = MODE_DEMO;
-      if (modeChosen !== MODE_DEMO) modeChosen = MODE_DEMO;
+      skipNextStateAnimations = true;
       window.setTimeout(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        if (ws === socket && socket.readyState === WebSocket.OPEN) {
           join(MODE_DEMO);
         }
       }, 80);
     }
   });
 
-  ws.addEventListener('close', () => {
+  socket.addEventListener('close', () => {
+    if (ws !== socket) return;
     clearWsHeartbeat();
+    ws = null;
     if (wantsDemoReconnect()) {
       statusEl.textContent = 'Disconnected. Reconnecting demo...';
       setStatusMessage('Connection dropped. Reconnecting demo...');
       demoAutoRejoinPending = true;
+      skipNextStateAnimations = true;
       myMark = null;
       scheduleDemoReconnect();
       return;
@@ -975,7 +982,8 @@ function connect() {
     setStatusMessage('Disconnected. Refresh to reconnect.');
   });
 
-  ws.addEventListener('message', (evt) => {
+  socket.addEventListener('message', (evt) => {
+    if (ws !== socket) return;
     const msg = JSON.parse(evt.data);
     handleMessage(msg);
   });
@@ -1230,6 +1238,10 @@ function handleMessage(msg) {
 
       if (msg.pieces) {
         let appearing = detectAppearingPieces(msg.pieces);
+        if (skipNextStateAnimations) {
+          appearing = [];
+          skipNextStateAnimations = false;
+        }
         // Remote-mode special case: when you're the second mover, the
         // opponent's piece may appear only as a reveal of an already-placed
         // move. Animate only your own newly committed piece.
