@@ -54,6 +54,10 @@ const analysisCard = document.getElementById('analysisCard');
 const analysisPanelEl = document.getElementById('analysisPanel');
 
 let ws;
+let wsHeartbeatTimer = null;
+let demoReconnectTimer = null;
+let demoReconnectAttempts = 0;
+let demoAutoRejoinPending = false;
 let myMark = null;              // "O" or "X"
 let modeChosen = null;
 let selectedJoinMode = null;
@@ -77,6 +81,7 @@ const MODE_HUMAN_VS_BOT = 'human_vs_bot';
 const MODE_DEMO = 'demo';
 let demoWins = { O: 0, X: 0 };
 let demoAutoRestartTimer = null;
+const WS_HEARTBEAT_MS = 20000;
 
 let players = { O: null, X: null }; // backend sends strings or null
 let scores = { O: 0, X: 0 };        // backend sends {O: number, X: number}
@@ -221,6 +226,51 @@ function send(obj) {
   ws.send(JSON.stringify(obj));
 }
 
+function clearWsHeartbeat() {
+  if (wsHeartbeatTimer) {
+    window.clearInterval(wsHeartbeatTimer);
+    wsHeartbeatTimer = null;
+  }
+}
+
+function startWsHeartbeat() {
+  clearWsHeartbeat();
+  wsHeartbeatTimer = window.setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      send({ type: 'lobby' });
+    }
+  }, WS_HEARTBEAT_MS);
+}
+
+function clearDemoReconnectTimer() {
+  if (demoReconnectTimer) {
+    window.clearTimeout(demoReconnectTimer);
+    demoReconnectTimer = null;
+  }
+}
+
+function wantsDemoReconnect() {
+  return (
+    modeChosen === MODE_DEMO ||
+    selectedJoinMode === MODE_DEMO ||
+    lobbyMode === MODE_DEMO
+  );
+}
+
+function scheduleDemoReconnect() {
+  if (!wantsDemoReconnect()) return;
+  if (demoReconnectTimer) return;
+  const delayMs = Math.min(30000, 1000 * (2 ** Math.min(demoReconnectAttempts, 5)));
+  demoReconnectTimer = window.setTimeout(() => {
+    demoReconnectTimer = null;
+    demoReconnectAttempts += 1;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    connect();
+  }, delayMs);
+}
+
 function playerName(mark, fallback) {
   const p = players?.[mark];
   if (typeof p === 'string' && p.trim()) return p;
@@ -354,6 +404,7 @@ function clearDemoAutoRestartTimer() {
     window.clearTimeout(demoAutoRestartTimer);
     demoAutoRestartTimer = null;
   }
+  clearDemoReconnectTimer();
 }
 
 function computeTurnMessage() {
@@ -895,10 +946,31 @@ function connect() {
 
   ws.addEventListener('open', () => {
     statusEl.textContent = 'Connected.';
+    startWsHeartbeat();
     send({ type: 'lobby' });
+    if (demoAutoRejoinPending) {
+      demoAutoRejoinPending = false;
+      demoReconnectAttempts = 0;
+      if (selectedJoinMode !== MODE_DEMO) selectedJoinMode = MODE_DEMO;
+      if (modeChosen !== MODE_DEMO) modeChosen = MODE_DEMO;
+      window.setTimeout(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          join(MODE_DEMO);
+        }
+      }, 80);
+    }
   });
 
   ws.addEventListener('close', () => {
+    clearWsHeartbeat();
+    if (wantsDemoReconnect()) {
+      statusEl.textContent = 'Disconnected. Reconnecting demo...';
+      setStatusMessage('Connection dropped. Reconnecting demo...');
+      demoAutoRejoinPending = true;
+      myMark = null;
+      scheduleDemoReconnect();
+      return;
+    }
     statusEl.textContent = 'Disconnected. Refresh to reconnect.';
     setStatusMessage('Disconnected. Refresh to reconnect.');
   });
