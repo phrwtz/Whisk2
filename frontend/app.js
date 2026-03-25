@@ -463,7 +463,7 @@ function computeTurnMessage() {
   if (youMoved && !oppMoved) {
     return `Waiting for ${oppName}'s move.`;
   }
-  return `Both moves received.`;
+  return `New turn. You haven't moved yet and neither has ${oppName}.`;
 }
 
 function escapeHtml(text) {
