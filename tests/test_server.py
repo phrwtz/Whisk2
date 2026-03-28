@@ -1185,3 +1185,44 @@ def test_pending_lookahead_timeout_returns_prior_best_without_full_eval(tmp_path
 
     assert (decision.row, decision.col) == (1, 1)
     assert decision.source == "model_lookahead"
+
+
+def test_pending_utility_prefers_blocking_and_cohesive_reply(tmp_path: Path):
+    state = GameState()
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=3, turn_placed=1))
+    apply_move(state, Mark.O, 0, 2)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=29)
+
+    class FlatModel:
+        def predict(self, obs):
+            return ([0.0] * ActionCodec.NUM_ACTIONS, 0.0)
+
+    bot.model = FlatModel()  # type: ignore[assignment]
+
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+    block_id = ActionCodec.coord_to_action(0, 3)
+    far_id = ActionCodec.coord_to_action(7, 7)
+
+    block_utility = bot._pending_action_utility(
+        env=env,
+        bot_mark=Mark.X,
+        opponent=Mark.O,
+        action_id=block_id,
+        prior=0.0,
+    )
+    far_utility = bot._pending_action_utility(
+        env=env,
+        bot_mark=Mark.X,
+        opponent=Mark.O,
+        action_id=far_id,
+        prior=0.0,
+    )
+
+    assert block_utility > far_utility

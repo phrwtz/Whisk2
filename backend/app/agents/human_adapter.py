@@ -508,6 +508,7 @@ class HumanVsAgentSession:
         if deadline is not None and time.perf_counter() >= deadline:
             return -1e9
         action = ActionCodec.action_to_coord(action_id)
+        opp_threat_before = self._max_immediate_score(env, opponent)
         sim_env = env.clone()
         try:
             sim_env.reserve_move(bot_mark, action)
@@ -539,6 +540,9 @@ class HumanVsAgentSession:
         minimax_margin = self._one_turn_minimax_margin(sim_env, bot_mark, opponent)
         defense_urgency = self._defense_urgency(sim_env.state, bot_mark, opponent)
         opp_score_after = int(sim_env.state.scores[opponent])
+        block_gain = max(0.0, (min(9, opp_threat_before) - min(9, opp_threat)) / 9.0)
+        line_support = self._line_support_score(sim_env.state, bot_mark, action)
+        neighbor_support = self._neighbor_support_score(sim_env.state, bot_mark, action)
 
         rollout_value = self._rollout_value(sim_env, bot_mark, deadline=deadline)
         win_risk_penalty = 0.0
@@ -546,13 +550,16 @@ class HumanVsAgentSession:
             win_risk_penalty = 1.10 + (0.80 * defense_urgency)
 
         return (
-            (1.25 * float(next_value))
-            + (0.45 * float(immediate_delta))
-            + (0.35 * rollout_value)
-            + (0.30 * minimax_margin)
-            + (0.20 * prior)
-            + (0.12 * bot_threat_norm)
-            - ((0.20 + (0.55 * defense_urgency)) * opp_threat_norm)
+            (1.15 * float(next_value))
+            + (0.55 * float(immediate_delta))
+            + (0.28 * rollout_value)
+            + (0.26 * minimax_margin)
+            + (0.08 * prior)
+            + (0.16 * bot_threat_norm)
+            + (0.85 * block_gain)
+            + (0.45 * line_support)
+            + (0.22 * neighbor_support)
+            - ((0.45 + (0.95 * defense_urgency)) * opp_threat_norm)
             - win_risk_penalty
             + (0.75 * terminal_bonus)
         )
@@ -633,7 +640,53 @@ class HumanVsAgentSession:
         bot_best = self._max_immediate_score(env, bot_mark)
         opp_best = self._max_immediate_score(env, opponent)
         return (min(9, bot_best) - min(9, opp_best)) / 9.0
+    
+    
+    @staticmethod
+    def _line_support_score(state: GameState, mark: Mark, action: Coord) -> float:
+        row, col = action
+        occupied = {(p.row, p.col) for p in state.pieces[mark]}
+        if (row, col) not in occupied:
+            occupied.add((row, col))
 
+        best = 1
+        for dr, dc in ((1, 0), (0, 1), (1, 1), (1, -1)):
+            run = 1
+
+            r, c = row + dr, col + dc
+            while (r, c) in occupied:
+                run += 1
+                r += dr
+                c += dc
+
+            r, c = row - dr, col - dc
+            while (r, c) in occupied:
+                run += 1
+                r -= dr
+                c -= dc
+
+            if run > best:
+                best = run
+
+        return max(0.0, min(1.0, (best - 1) / 4.0))
+    
+    
+    @staticmethod
+    def _neighbor_support_score(state: GameState, mark: Mark, action: Coord) -> float:
+        row, col = action
+        occupied = {(p.row, p.col) for p in state.pieces[mark]}
+
+        neighbors = 0
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                if (row + dr, col + dc) in occupied:
+                    neighbors += 1
+
+        return max(0.0, min(1.0, neighbors / 3.0))
+    
+    
     @staticmethod
     def _immediate_move_score(env: WhiskEnv, mark: Mark, action: Coord) -> int:
         state = deepcopy(env.state)
