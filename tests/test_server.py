@@ -1030,6 +1030,88 @@ def test_human_adapter_must_blocks_single_imminent_five_threat(tmp_path: Path):
     assert decision.source == "must_block"
 
 
+def test_human_adapter_must_blocks_high_value_near_goal_threat(tmp_path: Path):
+    # Even without an immediate 5 threat, O is close enough to 50 that a 4-point line must be blocked.
+    state = GameState()
+    state.scores[Mark.O] = 42
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=5)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 3)
+    assert decision.source == "must_block"
+
+
+def test_human_adapter_forced_score_takes_immediate_four_non_pending(tmp_path: Path):
+    state = GameState()
+    for i, (row, col) in enumerate(((1, 0), (1, 1), (1, 2)), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=row, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=6)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (1, 3)
+    assert decision.source == "forced_score"
+
+
+def test_sample_action_from_flat_scores_is_deterministic(tmp_path: Path):
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=21)
+    bot.stochastic_top_k = 5
+    bot.stochastic_epsilon = 0.5
+
+    center_id = ActionCodec.coord_to_action(4, 4)
+    corner_id = ActionCodec.coord_to_action(0, 0)
+    edge_id = ActionCodec.coord_to_action(7, 0)
+    scores = {
+        center_id: 0.05,
+        corner_id: 0.05,
+        edge_id: 0.05,
+    }
+
+    picks = {bot._sample_action_from_scores(scores) for _ in range(20)}
+    assert picks == {center_id}
+
+
+def test_human_adapter_live_tactical_overrides_flat_mcts_in_pressure(monkeypatch, tmp_path: Path):
+    state = GameState(turn=12)
+    for i, (row, col) in enumerate(((0, 0), (0, 1), (0, 2)), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=row, col=col, turn_placed=i))
+    # Keep X at full queue so this is not treated as opening phase.
+    for i, (row, col) in enumerate(((4, 4), (5, 6), (6, 1), (7, 3), (3, 7)), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=row, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=13)
+
+    class FlatModel:
+        def predict(self, obs):
+            return ([0.0] * ActionCodec.NUM_ACTIONS, 0.0)
+
+    bot.model = FlatModel()  # type: ignore[assignment]
+
+    def fake_search(self, env, mark, rng):
+        pi = [0.0] * ActionCodec.NUM_ACTIONS
+        legal = env.legal_actions(mark)
+        if not legal:
+            return pi
+        p = 1.0 / len(legal)
+        for r, c in legal:
+            pi[ActionCodec.coord_to_action(r, c)] = p
+        return pi
+
+    monkeypatch.setattr("backend.app.agents.human_adapter.MCTS.search", fake_search)
+
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 3)
+    assert decision.source == "live_tactical"
+
+
 def test_human_adapter_opening_tactical_blocks_high_value_extension(tmp_path: Path):
     # Human O has three in a row; strongest immediate extension is at (0,3).
     state = GameState()
