@@ -11,3 +11,11 @@ services:
     envVars:
       - key: PORT
         value: "8000"
+      - key: WHISK_BOT_MCTS_SIMS
+        value: "64"
+      - key: WHISK_BOT_TEMPERATURE
+        value: "0.05"
+      - key: WHISK_BOT_EPSILON
+        value: "0.0"
+      - key: WHISK_BOT_TOP_K
+        value: "1"
