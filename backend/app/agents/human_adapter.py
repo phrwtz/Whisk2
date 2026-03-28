@@ -54,6 +54,8 @@ class HumanVsAgentSession:
         self.stochastic_epsilon = self._env_float("WHISK_BOT_EPSILON", 0.05, min_value=0.0, max_value=0.5)
         self.stochastic_top_k = self._env_int("WHISK_BOT_TOP_K", 5, min_value=1, max_value=16)
         self.flat_score_tie_tol = self._env_float("WHISK_BOT_FLAT_SCORE_TIE_TOL", 0.02, min_value=0.0, max_value=0.5)
+        self.defense_lock_score = self._env_int("WHISK_BOT_DEFENSE_LOCK_SCORE", 44, min_value=35, max_value=49)
+        self.defense_lock_min_threat = self._env_int("WHISK_BOT_DEFENSE_LOCK_MIN_THREAT", 1, min_value=1, max_value=9)
         self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 64, min_value=4, max_value=64)
         self.pending_rollouts = self._env_int("WHISK_BOT_PENDING_ROLLOUTS", 3, min_value=0, max_value=16)
         self.pending_rollout_turns = self._env_int("WHISK_BOT_PENDING_ROLLOUT_TURNS", 4, min_value=1, max_value=32)
@@ -104,12 +106,20 @@ class HumanVsAgentSession:
             env, bot_mark, opponent, legal_ids, deadline=deadline
         )
         if must_block_ids:
-            scores = {action_id: 0.0 for action_id in must_block_ids}
+            priors = None
             if self.model is not None:
                 obs = StateEncoder.encode_observation(env.state, bot_mark)
                 priors, _ = self.model.predict(obs)
-                for action_id in must_block_ids:
-                    scores[action_id] = float(priors[action_id])
+            scores = {
+                action_id: self._must_block_choice_score(
+                    env,
+                    bot_mark,
+                    opponent,
+                    action_id,
+                    prior=(float(priors[action_id]) if priors is not None else 0.0),
+                )
+                for action_id in must_block_ids
+            }
             chosen_id = self._argmax_with_random_tie_break(scores)
             return self._build_decision(chosen_id, "must_block", scores)
 
@@ -170,10 +180,12 @@ class HumanVsAgentSession:
                     bot_score_now = int(env.state.scores[bot_mark])
                     opp_threat_now = self._max_immediate_score(env, opponent)
                     bot_threat_now = self._max_immediate_score(env, bot_mark)
+                    defense_lock_state = self._is_defense_lock_active(opp_score_now, opp_threat_now)
                     urgent_state = (
                         opp_threat_now >= 9
                         or opp_score_now + opp_threat_now >= 50
                         or (opp_score_now >= 40 and opp_threat_now >= 4)
+                        or defense_lock_state
                         or bot_threat_now >= 9
                         or bot_score_now + bot_threat_now >= 50
                     )
@@ -191,6 +203,56 @@ class HumanVsAgentSession:
             candidates=[BotCandidate(row=row, col=col, score=1.0)],
         )
 
+    def _must_block_choice_score(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        action_id: int,
+        prior: float = 0.0,
+    ) -> float:
+        action = ActionCodec.action_to_coord(action_id)
+        sim_env = env.clone()
+        try:
+            sim_env.reserve_move(bot_mark, action)
+            if sim_env.state.pending[opponent] is not None:
+                if not sim_env.ready_to_commit():
+                    return -1e9
+                sim_env.commit_pending_turn()
+        except Exception:
+            return -1e9
+
+        opp_best_after = self._max_immediate_score(sim_env, opponent)
+        opp_score_after = int(sim_env.state.scores[opponent])
+        opp_scoring_moves = self._count_immediate_scoring_moves(sim_env, opponent)
+        opp_legal_count = max(1, len(sim_env.legal_actions(opponent)))
+
+        own_now = self._immediate_move_score(env, bot_mark, action)
+        own_norm = min(9, own_now) / 9.0
+        opp_norm = min(9, opp_best_after) / 9.0
+        scoring_density = min(1.0, opp_scoring_moves / float(opp_legal_count))
+        near_goal_risk = 1.0 if (
+            opp_score_after >= self.defense_lock_score and opp_best_after >= self.defense_lock_min_threat
+        ) else 0.0
+        win_risk = 1.0 if (opp_score_after + opp_best_after >= 50) else 0.0
+
+        return (
+            -(2.5 * win_risk)
+            - (1.5 * near_goal_risk)
+            - (1.25 * opp_norm)
+            - (0.45 * scoring_density)
+            + (0.25 * own_norm)
+            + (0.10 * self._line_support_score(env.state, bot_mark, action))
+            + (0.06 * self._center_bias(action))
+            + (0.06 * prior)
+        )
+
+    def _count_immediate_scoring_moves(self, env: WhiskEnv, mark: Mark) -> int:
+        legal = env.legal_actions(mark)
+        if not legal:
+            return 0
+        return sum(1 for coord in legal if self._immediate_move_score(env, mark, coord) > 0)
+
     def _must_take_high_value_score_ids(
         self,
         env: WhiskEnv,
@@ -200,6 +262,7 @@ class HumanVsAgentSession:
         deadline: float | None = None,
     ) -> List[int]:
         bot_score_now = int(env.state.scores[bot_mark])
+        opp_score_now = int(env.state.scores[opponent])
         immediate_by_action: Dict[int, int] = {}
         for action_id in legal_ids:
             if deadline is not None and time.perf_counter() >= deadline:
@@ -211,6 +274,11 @@ class HumanVsAgentSession:
             return []
 
         best_immediate = max(immediate_by_action.values())
+        if (
+            self._is_defense_lock_active(opp_score_now, self.defense_lock_min_threat)
+            and (bot_score_now + best_immediate < 50)
+        ):
+            return []
         if best_immediate < 4 and (bot_score_now + best_immediate < 50):
             return []
 
@@ -255,9 +323,13 @@ class HumanVsAgentSession:
         opp_threat_before = self._max_immediate_score(env, opponent)
         bot_threat_before = self._max_immediate_score(env, bot_mark)
 
-        # Keep tactical override focused on pressured or high-upside moments.
+        defense_lock_active = self._is_defense_lock_active(opp_score_now, opp_threat_before)
+
+        # Keep tactical override focused on pressured or high-upside moments,
+        # except in explicit defense-lock endgames.
         if (
-            opp_threat_before < 4
+            not defense_lock_active
+            and opp_threat_before < 4
             and bot_threat_before < 4
             and opp_score_now < 36
             and bot_score_now < 36
@@ -289,6 +361,7 @@ class HumanVsAgentSession:
 
             own_finish = bot_score_now + own_now >= 50
             high_risk = opp_score_now >= 40 and opp_threat_after >= 4
+            defense_lock_risk = self._is_defense_lock_active(opp_score_now, opp_threat_after)
             win_risk = opp_score_now + opp_threat_after >= 50
 
             score = (
@@ -306,6 +379,8 @@ class HumanVsAgentSession:
                 score -= 1.20
             if win_risk:
                 score -= 2.40
+            elif defense_lock_risk:
+                score -= 1.35
             if own_now >= 4:
                 score += 0.60
             if own_finish:
@@ -602,11 +677,13 @@ class HumanVsAgentSession:
             opp_score_after = int(sim_env.state.scores[opponent])
             opp_total = float(opp_score_after + opp_threat)
             opp_win_risk = 1.0 if opp_total >= 50.0 else 0.0
+            opp_defense_lock_risk = 1.0 if self._is_defense_lock_active(opp_score_after, opp_threat) else 0.0
             line_support = self._line_support_score(sim_env.state, bot_mark, action)
             neighbor_support = self._neighbor_support_score(sim_env.state, bot_mark, action)
 
             defense_score = (
                 (-5.0 * opp_win_risk)
+                - (1.6 * opp_defense_lock_risk)
                 - (1.8 * (min(9, opp_threat) / 9.0))
                 - (0.6 * (min(60.0, opp_total) / 50.0))
                 + (0.45 * (min(9, added_self) / 9.0))
@@ -618,11 +695,17 @@ class HumanVsAgentSession:
                 {
                     "action_id": float(action_id),
                     "opp_win_risk": opp_win_risk,
+                    "opp_defense_lock_risk": opp_defense_lock_risk,
                     "defense_score": defense_score,
                 }
             )
 
-            if added_self >= 4 and opp_threat < 9 and (opp_score_after + opp_threat < 50):
+            if (
+                added_self >= 4
+                and opp_threat < 9
+                and (opp_score_after + opp_threat < 50)
+                and opp_defense_lock_risk == 0.0
+            ):
                 forced_scores[action_id] = (
                     (2.5 * float(added_self))
                     - (0.4 * float(added_opp))
@@ -630,8 +713,15 @@ class HumanVsAgentSession:
                     + (0.20 * neighbor_support)
                 )
 
-        if defense_rows and any(row["opp_win_risk"] > 0.0 for row in defense_rows):
-            safe_rows = [row for row in defense_rows if row["opp_win_risk"] == 0.0]
+        if defense_rows and any(
+            row["opp_win_risk"] > 0.0 or row["opp_defense_lock_risk"] > 0.0
+            for row in defense_rows
+        ):
+            safe_rows = [
+                row
+                for row in defense_rows
+                if row["opp_win_risk"] == 0.0 and row["opp_defense_lock_risk"] == 0.0
+            ]
             pool = safe_rows if safe_rows else defense_rows
             defense_scores = {
                 int(row["action_id"]): float(row["defense_score"])
@@ -688,6 +778,7 @@ class HumanVsAgentSession:
         opp_score_after_by_action: Dict[int, int] = {}
         has_high_threat_risk = False
         has_immediate_win_risk = False
+        has_defense_lock_risk = False
         has_safe_alternative = False
         for action_id in scores:
             if deadline is not None and time.perf_counter() >= deadline:
@@ -701,12 +792,18 @@ class HumanVsAgentSession:
                 has_high_threat_risk = True
             if opp_score_after + threat >= 50:
                 has_immediate_win_risk = True
+            if self._is_defense_lock_active(opp_score_after, threat):
+                has_defense_lock_risk = True
 
-            safe_action = threat < 4 and (opp_score_after + threat < 50)
+            safe_action = (
+                threat < 4
+                and (opp_score_after + threat < 50)
+                and not self._is_defense_lock_active(opp_score_after, threat)
+            )
             if safe_action:
                 has_safe_alternative = True
 
-        if not ((has_high_threat_risk or has_immediate_win_risk) and has_safe_alternative):
+        if not ((has_high_threat_risk or has_immediate_win_risk or has_defense_lock_risk) and has_safe_alternative):
             return scores
 
         filtered = {
@@ -715,6 +812,10 @@ class HumanVsAgentSession:
             if (
                 risk_by_action.get(action_id, 4) < 4
                 and (opp_score_after_by_action.get(action_id, 50) + risk_by_action.get(action_id, 4) < 50)
+                and not self._is_defense_lock_active(
+                    opp_score_after_by_action.get(action_id, 50),
+                    risk_by_action.get(action_id, 4),
+                )
             )
         }
         return filtered or scores
@@ -790,6 +891,8 @@ class HumanVsAgentSession:
         win_risk_penalty = 0.0
         if opp_score_after + opp_threat >= 50:
             win_risk_penalty = 1.10 + (0.80 * defense_urgency)
+        elif self._is_defense_lock_active(opp_score_after, opp_threat):
+            win_risk_penalty = 0.65 + (0.55 * defense_urgency)
 
         return (
             (1.15 * float(next_value))
@@ -1067,6 +1170,12 @@ class HumanVsAgentSession:
         # Normalize to roughly [-1, 0], higher is better (near center).
         return -(((row - 3.5) ** 2 + (col - 3.5) ** 2) / 24.5)
 
+    def _is_defense_lock_active(self, opponent_score: int, opponent_threat: int) -> bool:
+        return (
+            int(opponent_score) >= int(self.defense_lock_score)
+            and int(opponent_threat) >= int(self.defense_lock_min_threat)
+        )
+
     def _must_block_imminent_five_ids(
         self,
         env: WhiskEnv,
@@ -1105,6 +1214,10 @@ class HumanVsAgentSession:
                         opp_score_after_by_action[action_id] >= 40
                         and opp_best_by_action[action_id] >= 4
                     )
+                    or self._is_defense_lock_active(
+                        opp_score_after_by_action[action_id],
+                        opp_best_by_action[action_id],
+                    )
                 )
                 for action_id in opp_best_by_action
             }
@@ -1134,6 +1247,7 @@ class HumanVsAgentSession:
                 threat >= 9
                 or (opp_score_now + threat >= 50)
                 or (opp_score_now >= 40 and threat >= 4)
+                or self._is_defense_lock_active(opp_score_now, threat)
             )
         }
         if not critical_threat_coords:

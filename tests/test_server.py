@@ -1045,6 +1045,38 @@ def test_human_adapter_must_blocks_high_value_near_goal_threat(tmp_path: Path):
     assert decision.source == "must_block"
 
 
+def test_human_adapter_must_blocks_near_goal_single_point_threat(tmp_path: Path):
+    # Near goal, even a 1-point immediate scoring move should trigger defense-first play.
+    state = GameState()
+    state.scores[Mark.O] = 46
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=9)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 2)
+    assert decision.source == "must_block"
+
+
+def test_human_adapter_near_goal_blocks_instead_of_forced_score(tmp_path: Path):
+    # When O is near goal, X should block immediate scoring threats instead of chasing a 4-point score.
+    state = GameState()
+    state.scores[Mark.O] = 46
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=17)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 2)
+    assert decision.source == "must_block"
+
+
 def test_human_adapter_forced_score_takes_immediate_four_non_pending(tmp_path: Path):
     state = GameState()
     for i, (row, col) in enumerate(((1, 0), (1, 1), (1, 2)), start=1):
