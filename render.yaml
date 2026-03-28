@@ -11,6 +11,8 @@ services:
     envVars:
       - key: PORT
         value: "8000"
+      - key: WHISK_BOT_CHECKPOINT
+        value: "artifacts/releases/whiskbot_latest.pkl"
       - key: WHISK_BOT_MCTS_SIMS
         value: "64"
       - key: WHISK_BOT_TEMPERATURE
@@ -19,3 +21,13 @@ services:
         value: "0.0"
       - key: WHISK_BOT_TOP_K
         value: "1"
+      - key: WHISK_BOT_PENDING_EVAL_TOP_K
+        value: "24"
+      - key: WHISK_BOT_PENDING_ROLLOUTS
+        value: "8"
+      - key: WHISK_BOT_PENDING_ROLLOUT_TURNS
+        value: "8"
+      - key: WHISK_BOT_MOVE_TIME_LIMIT_SEC
+        value: "20"
+      - key: WHISK_BOT_DECISION_TIMEOUT_SEC
+        value: "25"

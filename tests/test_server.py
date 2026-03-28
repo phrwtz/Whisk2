@@ -1088,6 +1088,33 @@ def test_pending_safety_filter_drops_immediate_five_blunders(tmp_path: Path):
     assert risky_id not in filtered
 
 
+def test_pending_safety_filter_drops_immediate_four_blunders(tmp_path: Path):
+    # O has a pending third-in-a-row at (0,2). If X ignores column 3 now,
+    # O can score 4 points next turn with (0,3).
+    state = GameState()
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    apply_move(state, Mark.O, 0, 2)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=13)
+
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+    safe_id = ActionCodec.coord_to_action(0, 3)
+    risky_id = ActionCodec.coord_to_action(7, 7)
+    filtered = bot._apply_pending_immediate_five_safety_filter(
+        env=env,
+        bot_mark=Mark.X,
+        scores={safe_id: -2.0, risky_id: 10.0},
+    )
+
+    assert safe_id in filtered
+    assert risky_id not in filtered
+
+
 def test_pending_safety_filter_blocks_immediate_score_to_50(tmp_path: Path):
     # O is near target score and can create a 4-point line next turn unless X blocks now.
     state = GameState()

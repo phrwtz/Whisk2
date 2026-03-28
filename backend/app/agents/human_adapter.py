@@ -444,7 +444,7 @@ class HumanVsAgentSession:
 
         risk_by_action: Dict[int, int] = {}
         opp_score_after_by_action: Dict[int, int] = {}
-        has_immediate_five_risk = False
+        has_high_threat_risk = False
         has_immediate_win_risk = False
         has_safe_alternative = False
         for action_id in scores:
@@ -455,22 +455,24 @@ class HumanVsAgentSession:
             )
             risk_by_action[action_id] = threat
             opp_score_after_by_action[action_id] = opp_score_after
-            if threat >= 9:
-                has_immediate_five_risk = True
+            if threat >= 4:
+                has_high_threat_risk = True
             if opp_score_after + threat >= 50:
                 has_immediate_win_risk = True
-            else:
+
+            safe_action = threat < 4 and (opp_score_after + threat < 50)
+            if safe_action:
                 has_safe_alternative = True
 
-        if not ((has_immediate_five_risk or has_immediate_win_risk) and has_safe_alternative):
+        if not ((has_high_threat_risk or has_immediate_win_risk) and has_safe_alternative):
             return scores
 
         filtered = {
             action_id: score
             for action_id, score in scores.items()
             if (
-                risk_by_action.get(action_id, 9) < 9
-                and (opp_score_after_by_action.get(action_id, 50) + risk_by_action.get(action_id, 9) < 50)
+                risk_by_action.get(action_id, 4) < 4
+                and (opp_score_after_by_action.get(action_id, 50) + risk_by_action.get(action_id, 4) < 50)
             )
         }
         return filtered or scores
