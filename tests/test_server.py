@@ -1226,3 +1226,61 @@ def test_pending_utility_prefers_blocking_and_cohesive_reply(tmp_path: Path):
     )
 
     assert block_utility > far_utility
+
+
+def test_pending_forced_score_prefers_immediate_four(tmp_path: Path):
+    state = GameState()
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=0, turn_placed=1))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=1, turn_placed=2))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=2, turn_placed=3))
+    apply_move(state, Mark.O, 7, 7)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=31)
+
+    class FlatModel:
+        def predict(self, obs):
+            return ([0.0] * ActionCodec.NUM_ACTIONS, 0.0)
+
+    bot.model = FlatModel()  # type: ignore[assignment]
+
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (1, 3)
+    assert decision.source == "forced_score"
+
+
+def test_pending_forced_defense_blocks_near_win_threat(tmp_path: Path):
+    state = GameState()
+    state.scores[Mark.O] = 46
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    state.pieces[Mark.X].append(Piece(mark=Mark.X, row=7, col=0, turn_placed=1))
+    apply_move(state, Mark.O, 0, 2)
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=37)
+
+    class FlatModel:
+        def predict(self, obs):
+            return ([0.0] * ActionCodec.NUM_ACTIONS, 0.0)
+
+    bot.model = FlatModel()  # type: ignore[assignment]
+
+    from backend.app.agents.encoding import StateEncoder
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+    obs = StateEncoder.encode_observation(env.state, Mark.X)
+    legal_ids = [i for i, bit in enumerate(obs["legal_action_mask"]) if bit]
+
+    decision = bot._choose_pending_lookahead(
+        env=env,
+        bot_mark=Mark.X,
+        legal_ids=legal_ids,
+        obs=obs,
+    )
+
+    assert (decision.row, decision.col) == (0, 3)
+    assert decision.source == "forced_defense"

@@ -22,7 +22,7 @@ services:
       - key: WHISK_BOT_TOP_K
         value: "1"
       - key: WHISK_BOT_PENDING_EVAL_TOP_K
-        value: "24"
+        value: "64"
       - key: WHISK_BOT_PENDING_ROLLOUTS
         value: "8"
       - key: WHISK_BOT_PENDING_ROLLOUT_TURNS

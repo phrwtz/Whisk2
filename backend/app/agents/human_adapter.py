@@ -53,7 +53,7 @@ class HumanVsAgentSession:
         self.stochastic_temperature = self._env_float("WHISK_BOT_TEMPERATURE", 0.18, min_value=0.01, max_value=2.0)
         self.stochastic_epsilon = self._env_float("WHISK_BOT_EPSILON", 0.05, min_value=0.0, max_value=0.5)
         self.stochastic_top_k = self._env_int("WHISK_BOT_TOP_K", 5, min_value=1, max_value=16)
-        self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 10, min_value=2, max_value=24)
+        self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 64, min_value=4, max_value=64)
         self.pending_rollouts = self._env_int("WHISK_BOT_PENDING_ROLLOUTS", 3, min_value=0, max_value=16)
         self.pending_rollout_turns = self._env_int("WHISK_BOT_PENDING_ROLLOUT_TURNS", 4, min_value=1, max_value=32)
         self.opening_tactical_enabled = bool(
@@ -99,7 +99,6 @@ class HumanVsAgentSession:
 
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
-        self.rng.shuffle(legal_ids)
         must_block_ids = self._must_block_imminent_five_ids(
             env, bot_mark, opponent, legal_ids, deadline=deadline
         )
@@ -128,7 +127,6 @@ class HumanVsAgentSession:
         if self.model is not None:
             obs = StateEncoder.encode_observation(env.state, bot_mark)
             legal_ids = [i for i, bit in enumerate(obs["legal_action_mask"]) if bit]
-            self.rng.shuffle(legal_ids)
             if legal_ids:
                 # In Human-vs-Bot mode, the human's pending move is known at this point.
                 # Evaluate each legal bot response by committing the pending turn.
@@ -383,7 +381,16 @@ class HumanVsAgentSession:
         tied = [action_id for action_id, value in scores.items() if value >= best - tol]
         if len(tied) == 1:
             return tied[0]
-        return self.rng.choice(tied)
+
+        tied.sort(
+            key=lambda i: (
+                self._center_bias(ActionCodec.action_to_coord(i)),
+                -ActionCodec.action_to_coord(i)[0],
+                -ActionCodec.action_to_coord(i)[1],
+            ),
+            reverse=True,
+        )
+        return tied[0]
 
     def _choose_pending_lookahead(
         self,
@@ -398,9 +405,79 @@ class HumanVsAgentSession:
         priors, _ = self.model.predict(obs)
         scores: Dict[int, float] = {}
         ordered = list(legal_ids)
-        self.rng.shuffle(ordered)
-        ordered.sort(key=lambda i: priors[i], reverse=True)
+        ordered.sort(
+            key=lambda i: (
+                priors[i],
+                self._line_support_score(env.state, bot_mark, ActionCodec.action_to_coord(i)),
+                self._neighbor_support_score(env.state, bot_mark, ActionCodec.action_to_coord(i)),
+                self._center_bias(ActionCodec.action_to_coord(i)),
+            ),
+            reverse=True,
+        )
         candidate_ids = ordered[: min(len(ordered), self.pending_eval_top_k)]
+
+        forced_scores: Dict[int, float] = {}
+        defense_rows: List[Dict[str, float]] = []
+        for action_id in candidate_ids:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
+            action = ActionCodec.action_to_coord(action_id)
+            sim_env = env.clone()
+            try:
+                sim_env.reserve_move(bot_mark, action)
+                if not sim_env.ready_to_commit():
+                    continue
+                committed = sim_env.commit_pending_turn()
+            except Exception:
+                continue
+
+            added_self = int(committed.added.get(bot_mark.value, 0))
+            added_opp = int(committed.added.get(opponent.value, 0))
+            opp_threat = self._max_immediate_score(sim_env, opponent)
+            opp_score_after = int(sim_env.state.scores[opponent])
+            opp_total = float(opp_score_after + opp_threat)
+            opp_win_risk = 1.0 if opp_total >= 50.0 else 0.0
+            line_support = self._line_support_score(sim_env.state, bot_mark, action)
+            neighbor_support = self._neighbor_support_score(sim_env.state, bot_mark, action)
+
+            defense_score = (
+                (-5.0 * opp_win_risk)
+                - (1.8 * (min(9, opp_threat) / 9.0))
+                - (0.6 * (min(60.0, opp_total) / 50.0))
+                + (0.45 * (min(9, added_self) / 9.0))
+                - (0.20 * (min(9, added_opp) / 9.0))
+                + (0.35 * line_support)
+                + (0.20 * neighbor_support)
+            )
+            defense_rows.append(
+                {
+                    "action_id": float(action_id),
+                    "opp_win_risk": opp_win_risk,
+                    "defense_score": defense_score,
+                }
+            )
+
+            if added_self >= 4 and opp_threat < 9 and (opp_score_after + opp_threat < 50):
+                forced_scores[action_id] = (
+                    (2.5 * float(added_self))
+                    - (0.4 * float(added_opp))
+                    + (0.45 * line_support)
+                    + (0.20 * neighbor_support)
+                )
+
+        if defense_rows and any(row["opp_win_risk"] > 0.0 for row in defense_rows):
+            safe_rows = [row for row in defense_rows if row["opp_win_risk"] == 0.0]
+            pool = safe_rows if safe_rows else defense_rows
+            defense_scores = {
+                int(row["action_id"]): float(row["defense_score"])
+                for row in pool
+            }
+            chosen_defense = max(pool, key=lambda row: float(row["defense_score"]))
+            return self._build_decision(int(chosen_defense["action_id"]), "forced_defense", defense_scores)
+
+        if forced_scores:
+            chosen_forced = self._argmax_with_random_tie_break(forced_scores)
+            return self._build_decision(chosen_forced, "forced_score", forced_scores)
 
         for action_id in candidate_ids:
             if deadline is not None and time.perf_counter() >= deadline:
@@ -742,7 +819,16 @@ class HumanVsAgentSession:
         )
 
     def _sample_action_from_scores(self, scores: Dict[int, float]) -> int:
-        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        ranked = sorted(
+            scores.items(),
+            key=lambda kv: (
+                kv[1],
+                self._center_bias(ActionCodec.action_to_coord(kv[0])),
+                -ActionCodec.action_to_coord(kv[0])[0],
+                -ActionCodec.action_to_coord(kv[0])[1],
+            ),
+            reverse=True,
+        )
         if not ranked:
             raise RuntimeError("No candidate scores available for bot decision")
 
