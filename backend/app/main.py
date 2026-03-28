@@ -172,6 +172,10 @@ async def index() -> HTMLResponse:
     with open(FRONTEND_DIR / "index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
+@app.head("/")
+async def index_head() -> PlainTextResponse:
+    return PlainTextResponse("ok")
+
 
 @app.get("/instructions/{mode}")
 async def instructions(mode: str) -> PlainTextResponse:
