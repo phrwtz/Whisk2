@@ -86,6 +86,30 @@ From the repo root:
 pytest -q
 ```
 
+### Focused Endgame-Defense Training Pass
+
+Run a short, high-signal tuning pass before a long training run:
+
+```bash
+python scripts/run_endgame_defense_pass.py \
+  --base-checkpoint artifacts/releases/whiskbot_latest.pkl \
+  --iterations 2 \
+  --games-per-iteration 12 \
+  --selfplay-simulations 28 \
+  --comparison-games 24
+```
+
+This writes:
+- `artifacts/checkpoints/endgame_defense/whiskbot_endgame_defense_test.pkl`
+- `artifacts/checkpoints/endgame_defense/replay_endgame_defense.pkl`
+- `artifacts/reports/endgame_defense_pass.json`
+
+To only prepare the focused replay buffer (no training):
+
+```bash
+python scripts/run_endgame_defense_pass.py --prepare-only
+```
+
 ### Frontend Bot Harness (Milestone 9+)
 
 You can run a tiny UI regression harness for computer modes (headless Chromium via Playwright):
