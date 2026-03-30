@@ -110,6 +110,15 @@ To only prepare the focused replay buffer (no training):
 python scripts/run_endgame_defense_pass.py --prepare-only
 ```
 
+For an overnight time-budgeted experiment with cycle-by-cycle diagnostics:
+
+```bash
+python scripts/run_endgame_defense_overnight.py --hours 16
+```
+
+This writes a continuously updated report to:
+- `artifacts/experiments/endgame_defense_overnight/report.json`
+
 ### Frontend Bot Harness (Milestone 9+)
 
 You can run a tiny UI regression harness for computer modes (headless Chromium via Playwright):
