@@ -48,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--score-floor", type=int, default=40)
     parser.add_argument("--focus-multiplier", type=int, default=4)
     parser.add_argument("--defense-multiplier", type=int, default=7)
+    parser.add_argument("--threat-multiplier", type=int, default=6)
+    parser.add_argument("--critical-multiplier", type=int, default=9)
+    parser.add_argument("--threat-floor", type=int, default=4)
+    parser.add_argument("--near-goal-score", type=int, default=44)
     parser.add_argument("--background-cap", type=int, default=6000)
     parser.add_argument("--max-focused-examples", type=int, default=26000)
     parser.add_argument("--replay-capacity", type=int, default=30000)
@@ -112,6 +116,10 @@ def _prepare_focused_replay(args: argparse.Namespace, replay_out: Path) -> Dict[
         score_floor=args.score_floor,
         focus_multiplier=args.focus_multiplier,
         defense_multiplier=args.defense_multiplier,
+        threat_multiplier=args.threat_multiplier,
+        critical_multiplier=args.critical_multiplier,
+        threat_floor=args.threat_floor,
+        near_goal_score=args.near_goal_score,
         background_cap=args.background_cap,
         max_examples=min(args.max_focused_examples, args.replay_capacity),
         seed=args.seed,

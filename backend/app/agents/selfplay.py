@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from copy import deepcopy
+from collections import deque
 import random
 from dataclasses import dataclass
 from typing import Dict, List
@@ -11,11 +13,20 @@ from .encoding import ActionCodec, StateEncoder
 from .env import WhiskEnv
 from .mcts import MCTS
 from .model import WhiskPolicyValueModel
-from ..game import Mark
+from ..game import Mark, MAX_PIECES_PER_PLAYER, Piece, score_for_move
 
 POST_MIN_DELAY_SEC = 0.1
 POST_MAX_DELAY_SEC = 0.5
 POST_SIMULTANEOUS_EPSILON_SEC = 0.02
+DEFENSE_NEAR_GOAL_SCORE = 44
+DEFENSE_THREAT_FLOOR = 1
+DEFENSE_HIGH_THREAT_FLOOR = 4
+DEFENSE_PENALTY_BASE = 0.18
+DEFENSE_PENALTY_HIGH_THREAT = 0.22
+DEFENSE_PENALTY_NEAR_GOAL = 0.30
+DEFENSE_PENALTY_FORCED_LOSS = 0.35
+DEFENSE_PENALTY_MULTI_THREAT = 0.08
+DEFENSE_PENALTY_MAX = 0.85
 
 
 @dataclass
@@ -24,6 +35,79 @@ class SelfPlayConfig:
     seed: int = 0
     max_turns: int = 200
     simulations: int = 48
+
+
+def _immediate_move_score(env: WhiskEnv, mark: Mark, action: tuple[int, int]) -> int:
+    """Points `mark` would gain by committing `action` now."""
+    state = deepcopy(env.state)
+    row, col = action
+
+    pieces = {
+        Mark.O: deque(state.pieces[Mark.O]),
+        Mark.X: deque(state.pieces[Mark.X]),
+    }
+
+    pieces[mark].append(Piece(mark=mark, row=row, col=col, turn_placed=state.turn + 1))
+    while len(pieces[mark]) > MAX_PIECES_PER_PLAYER:
+        pieces[mark].popleft()
+
+    occ = {}
+    for piece_mark, dq in pieces.items():
+        for p in dq:
+            occ[(p.row, p.col)] = piece_mark
+
+    return score_for_move(occ, mark, action)
+
+
+def _opponent_immediate_threat_profile(env: WhiskEnv, mark: Mark) -> tuple[int, int]:
+    """Return (max immediate score, number of immediate scoring moves) for `mark`."""
+    legal = env.legal_actions(mark)
+    if not legal:
+        return (0, 0)
+
+    best = 0
+    scoring_moves = 0
+    for action in legal:
+        score = _immediate_move_score(env, mark, action)
+        if score > 0:
+            scoring_moves += 1
+        if score > best:
+            best = score
+    return (best, scoring_moves)
+
+
+def _defense_threat_penalty(
+    *,
+    opponent_score: int,
+    opponent_threat: int,
+    opponent_scoring_moves: int,
+) -> float:
+    if opponent_threat < DEFENSE_THREAT_FLOOR and opponent_scoring_moves <= 0:
+        return 0.0
+
+    penalty = DEFENSE_PENALTY_BASE
+    if opponent_scoring_moves >= 2:
+        penalty += DEFENSE_PENALTY_MULTI_THREAT
+    if opponent_threat >= DEFENSE_HIGH_THREAT_FLOOR:
+        penalty += DEFENSE_PENALTY_HIGH_THREAT
+    if opponent_score >= DEFENSE_NEAR_GOAL_SCORE and opponent_threat >= DEFENSE_THREAT_FLOOR:
+        penalty += DEFENSE_PENALTY_NEAR_GOAL
+    if opponent_score + opponent_threat >= 50:
+        penalty += DEFENSE_PENALTY_FORCED_LOSS
+    return min(DEFENSE_PENALTY_MAX, max(0.0, penalty))
+
+
+def _shape_value_target(example: Dict[str, object], terminal_value: float) -> float:
+    """Apply explicit penalty when opponent has immediate scoring threats."""
+    opp_score = int(example.get("opp_score_now", 0))
+    opp_threat = int(example.get("opp_immediate_threat", 0))
+    opp_scoring_moves = int(example.get("opp_scoring_moves", 0))
+    penalty = _defense_threat_penalty(
+        opponent_score=opp_score,
+        opponent_threat=opp_threat,
+        opponent_scoring_moves=opp_scoring_moves,
+    )
+    return max(-1.0, min(1.0, float(terminal_value) - penalty))
 
 
 def _generate_examples_shard(
@@ -55,6 +139,10 @@ def _generate_examples_shard(
         while not env.is_terminal() and env.state.turn < max_turns:
             obs_o = StateEncoder.encode_observation(env.state, Mark.O)
             obs_x = StateEncoder.encode_observation(env.state, Mark.X)
+            opp_threat_for_o, opp_scoring_for_o = _opponent_immediate_threat_profile(env, Mark.X)
+            opp_threat_for_x, opp_scoring_for_x = _opponent_immediate_threat_profile(env, Mark.O)
+            opp_score_for_o = int(env.state.scores[Mark.X])
+            opp_score_for_x = int(env.state.scores[Mark.O])
 
             pi_o = mcts.search(env, Mark.O, rng)
             pi_x = mcts.search(env, Mark.X, rng)
@@ -94,6 +182,9 @@ def _generate_examples_shard(
                     "player": "O",
                     "obs": obs_o,
                     "policy_target": pi_o,
+                    "opp_score_now": opp_score_for_o,
+                    "opp_immediate_threat": opp_threat_for_o,
+                    "opp_scoring_moves": opp_scoring_for_o,
                 }
             )
             game_traces.append(
@@ -102,6 +193,9 @@ def _generate_examples_shard(
                     "player": "X",
                     "obs": obs_x,
                     "policy_target": pi_x,
+                    "opp_score_now": opp_score_for_x,
+                    "opp_immediate_threat": opp_threat_for_x,
+                    "opp_scoring_moves": opp_scoring_for_x,
                 }
             )
 
@@ -113,7 +207,7 @@ def _generate_examples_shard(
                 z = 1.0
             else:
                 z = -1.0
-            ex["value_target"] = z
+            ex["value_target"] = _shape_value_target(ex, z)
             examples.append(ex)
 
         if progress_interval > 0 and (
