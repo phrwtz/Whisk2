@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -62,6 +64,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-passes", type=int, default=3)
 
     parser.add_argument("--comparison-games", type=int, default=32)
+    parser.add_argument("--train-retries", type=int, default=3)
+    parser.add_argument("--retry-sleep-sec", type=float, default=8.0)
+    parser.add_argument("--runtime-replay-path", type=Path, default=None)
+    parser.add_argument("--runtime-checkpoint-path", type=Path, default=None)
+    parser.add_argument("--runtime-work-dir", type=Path, default=None)
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -86,6 +93,13 @@ def _load_model(path: Path) -> WhiskPolicyValueModel:
     if path.exists():
         return WhiskPolicyValueModel.load(path)
     return WhiskPolicyValueModel()
+
+
+def _save_model_atomic(model: WhiskPolicyValueModel, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    model.save(tmp)
+    os.replace(tmp, path)
 
 
 def _prepare_focused_replay(args: argparse.Namespace, replay_out: Path) -> Dict[str, int]:
@@ -161,18 +175,39 @@ def main() -> None:
     verbose = not args.quiet
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    replay_path = args.work_dir / "focused_replay.pkl"
+    replay_snapshot_path = args.work_dir / "focused_replay.pkl"
     report_path = args.work_dir / "report.json"
-    current_ckpt_path = args.work_dir / "current_best.pkl"
+    current_ckpt_snapshot_path = args.work_dir / "current_best.pkl"
 
     started = time.time()
     deadline = started + (max(0.1, args.hours) * 3600.0)
 
-    base_model = _load_model(args.base_checkpoint)
-    base_model.save(current_ckpt_path)
-    base_hash = _sha1(current_ckpt_path)
+    runtime_replay_path = (
+        args.runtime_replay_path
+        if args.runtime_replay_path is not None
+        else Path(f"/tmp/whisk_endgame_defense_replay_{int(started)}.pkl")
+    )
+    runtime_checkpoint_path = (
+        args.runtime_checkpoint_path
+        if args.runtime_checkpoint_path is not None
+        else Path(f"/tmp/whisk_endgame_defense_current_{int(started)}.pkl")
+    )
+    runtime_work_dir = (
+        args.runtime_work_dir
+        if args.runtime_work_dir is not None
+        else Path(f"/tmp/whisk_endgame_defense_cycles_{int(started)}")
+    )
 
-    focus_stats = _prepare_focused_replay(args, replay_path)
+    base_model = _load_model(args.base_checkpoint)
+    current_model = base_model.copy()
+    _save_model_atomic(current_model, runtime_checkpoint_path)
+    shutil.copy2(runtime_checkpoint_path, current_ckpt_snapshot_path)
+    base_hash = _sha1(runtime_checkpoint_path)
+
+    focus_stats = _prepare_focused_replay(args, runtime_replay_path)
+    runtime_replay_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_work_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(runtime_replay_path, replay_snapshot_path)
     _log(verbose, f"[overnight] focused replay prepared: {focus_stats}")
 
     cycles: List[Dict[str, object]] = []
@@ -181,21 +216,47 @@ def main() -> None:
         remaining_sec = max(0.0, deadline - time.time())
         _log(verbose, f"[overnight] cycle {cycle_idx} start, remaining {remaining_sec/3600.0:.2f}h")
 
-        cycle_dir = args.work_dir / f"cycle_{cycle_idx:03d}"
+        cycle_dir = runtime_work_dir / f"cycle_{cycle_idx:03d}"
         cycle_dir.mkdir(parents=True, exist_ok=True)
         out_ckpt = cycle_dir / "best.pkl"
 
         cycle_seed = args.seed + cycle_idx * 10000
         cfg = _cycle_config(args, seed=cycle_seed)
         trainer = Trainer(cfg)
-        trainer.best_model = WhiskPolicyValueModel.load(current_ckpt_path)
+        trainer.best_model = current_model.copy()
+        prev_model = current_model.copy()
 
         c_start = time.time()
-        train_summary = trainer.train(out_ckpt, replay_path=replay_path)
+        train_summary = None
+        retries = max(1, int(args.train_retries))
+        for attempt in range(1, retries + 1):
+            try:
+                train_summary = trainer.train(out_ckpt, replay_path=runtime_replay_path)
+                break
+            except TimeoutError as exc:
+                if attempt >= retries:
+                    raise
+                _log(
+                    verbose,
+                    f"[overnight] cycle {cycle_idx} timeout on attempt {attempt}/{retries}: {exc}; retrying",
+                )
+                time.sleep(max(0.5, float(args.retry_sleep_sec)))
+            except OSError as exc:
+                if getattr(exc, "errno", None) != 60 or attempt >= retries:
+                    raise
+                _log(
+                    verbose,
+                    f"[overnight] cycle {cycle_idx} I/O timeout on attempt {attempt}/{retries}: {exc}; retrying",
+                )
+                time.sleep(max(0.5, float(args.retry_sleep_sec)))
+
+        assert train_summary is not None
         cycle_elapsed = time.time() - c_start
 
-        next_model = WhiskPolicyValueModel.load(out_ckpt)
-        prev_model = WhiskPolicyValueModel.load(current_ckpt_path)
+        if runtime_replay_path.exists():
+            shutil.copy2(runtime_replay_path, replay_snapshot_path)
+
+        next_model = trainer.best_model.copy()
 
         eval_cfg = TrainConfig(
             selfplay_simulations=max(16, args.selfplay_simulations),
@@ -220,8 +281,10 @@ def main() -> None:
         next_vs_random = evaluator.evaluate_vs_random(next_model, seed=cycle_seed + 303)
         prev_vs_random = evaluator.evaluate_vs_random(prev_model, seed=cycle_seed + 404)
 
-        next_model.save(current_ckpt_path)
-        new_hash = _sha1(current_ckpt_path)
+        current_model = next_model.copy()
+        _save_model_atomic(current_model, runtime_checkpoint_path)
+        shutil.copy2(runtime_checkpoint_path, current_ckpt_snapshot_path)
+        new_hash = _sha1(runtime_checkpoint_path)
 
         cycle_record = {
             "cycle": cycle_idx,
@@ -245,6 +308,9 @@ def main() -> None:
             "hours_budget": args.hours,
             "base_checkpoint": str(args.base_checkpoint),
             "work_dir": str(args.work_dir),
+            "runtime_work_dir": str(runtime_work_dir),
+            "runtime_replay_path": str(runtime_replay_path),
+            "runtime_checkpoint_path": str(runtime_checkpoint_path),
             "focus_stats": focus_stats,
             "cycles": cycles,
             "recommendation": _build_recommendation(cycles),
@@ -267,12 +333,15 @@ def main() -> None:
         "hours_budget": args.hours,
         "base_checkpoint": str(args.base_checkpoint),
         "work_dir": str(args.work_dir),
-        "focused_replay": str(replay_path),
+        "runtime_work_dir": str(runtime_work_dir),
+        "focused_replay": str(replay_snapshot_path),
+        "runtime_replay_path": str(runtime_replay_path),
+        "runtime_checkpoint_path": str(runtime_checkpoint_path),
         "focus_stats": focus_stats,
         "cycles": cycles,
         "recommendation": _build_recommendation(cycles),
-        "final_checkpoint": str(current_ckpt_path),
-        "final_checkpoint_sha1": _sha1(current_ckpt_path),
+        "final_checkpoint": str(current_ckpt_snapshot_path),
+        "final_checkpoint_sha1": _sha1(runtime_checkpoint_path),
     }
     report_path.write_text(json.dumps(final_report, indent=2), encoding="utf-8")
     print(json.dumps(final_report, indent=2))
