@@ -1090,6 +1090,119 @@ def test_human_adapter_forced_score_takes_immediate_four_non_pending(tmp_path: P
     assert decision.source == "forced_score"
 
 
+def test_human_adapter_ladder_prefers_win_now_over_block(tmp_path: Path):
+    # X can win immediately at (1,4) while O also threatens an immediate 5 at (0,4).
+    # Priority ladder should finish the game first.
+    state = GameState()
+    for i, col in enumerate((0, 1, 2, 3), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=41)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (1, 4)
+    assert decision.source == "forced_score"
+
+
+def test_human_adapter_ladder_blocks_high_threat_before_own_forced_score(tmp_path: Path):
+    # O has an immediate 4-point extension at (0,3). X also has an immediate 4-point
+    # extension at (1,3), but should block O first.
+    state = GameState()
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=43)
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 3)
+    assert decision.source == "must_block"
+
+
+def test_human_adapter_mcts_flat_policy_prefers_cohesive_move(monkeypatch, tmp_path: Path):
+    # Regression: when MCTS surface is flat, the bot should avoid isolated "random" placements.
+    state = GameState(turn=14)
+    for i, (row, col) in enumerate(((3, 3), (4, 4), (5, 3), (2, 4), (4, 2)), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=row, col=col, turn_placed=i))
+    for i, (row, col) in enumerate(((0, 0), (0, 7), (7, 0), (7, 7), (6, 6)), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=row, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=47)
+    bot.stochastic_epsilon = 0.0
+    bot.stochastic_temperature = 0.01
+
+    class FlatModel:
+        def predict(self, obs):
+            return ([0.0] * ActionCodec.NUM_ACTIONS, 0.0)
+
+    bot.model = FlatModel()  # type: ignore[assignment]
+
+    def fake_search(self, env, mark, rng):
+        pi = [0.0] * ActionCodec.NUM_ACTIONS
+        legal = env.legal_actions(mark)
+        if not legal:
+            return pi
+        p = 1.0 / len(legal)
+        for r, c in legal:
+            pi[ActionCodec.coord_to_action(r, c)] = p
+        return pi
+
+    monkeypatch.setattr("backend.app.agents.human_adapter.MCTS.search", fake_search)
+
+    decision = bot.choose_decision(state, Mark.X)
+    x_coords = {(piece.row, piece.col) for piece in state.pieces[Mark.X]}
+    adjacent_x_neighbors = 0
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            if (decision.row + dr, decision.col + dc) in x_coords:
+                adjacent_x_neighbors += 1
+
+    assert adjacent_x_neighbors >= 1
+
+
+def test_human_adapter_near_goal_must_block_overrides_flat_mcts(monkeypatch, tmp_path: Path):
+    # Regression from endgame logs: when O is near 50, X must prioritize blocking.
+    state = GameState(turn=18)
+    state.scores[Mark.O] = 48
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    # Keep X at full queue so this is not treated as opening phase.
+    for i, (row, col) in enumerate(((3, 3), (4, 4), (5, 3), (2, 4), (4, 2)), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=row, col=col, turn_placed=i))
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=53)
+
+    class FlatModel:
+        def predict(self, obs):
+            return ([0.0] * ActionCodec.NUM_ACTIONS, 0.0)
+
+    bot.model = FlatModel()  # type: ignore[assignment]
+
+    def fake_search(self, env, mark, rng):
+        pi = [0.0] * ActionCodec.NUM_ACTIONS
+        legal = env.legal_actions(mark)
+        if not legal:
+            return pi
+        p = 1.0 / len(legal)
+        for r, c in legal:
+            pi[ActionCodec.coord_to_action(r, c)] = p
+        return pi
+
+    monkeypatch.setattr("backend.app.agents.human_adapter.MCTS.search", fake_search)
+
+    decision = bot.choose_decision(state, Mark.X)
+
+    assert (decision.row, decision.col) == (0, 2)
+    assert decision.source == "must_block"
+
+
 def test_sample_action_from_flat_scores_is_deterministic(tmp_path: Path):
     missing_ckpt = tmp_path / "missing_model.pkl"
     bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=21)

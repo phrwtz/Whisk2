@@ -56,6 +56,18 @@ class HumanVsAgentSession:
         self.flat_score_tie_tol = self._env_float("WHISK_BOT_FLAT_SCORE_TIE_TOL", 0.02, min_value=0.0, max_value=0.5)
         self.defense_lock_score = self._env_int("WHISK_BOT_DEFENSE_LOCK_SCORE", 44, min_value=35, max_value=49)
         self.defense_lock_min_threat = self._env_int("WHISK_BOT_DEFENSE_LOCK_MIN_THREAT", 1, min_value=1, max_value=9)
+        self.high_immediate_block_threat = self._env_int(
+            "WHISK_BOT_HIGH_IMMEDIATE_BLOCK_THREAT", 4, min_value=1, max_value=9
+        )
+        self.live_isolation_penalty = self._env_float(
+            "WHISK_BOT_LIVE_ISOLATION_PENALTY", 0.24, min_value=0.0, max_value=2.0
+        )
+        self.live_cohesion_bonus = self._env_float(
+            "WHISK_BOT_LIVE_COHESION_BONUS", 0.22, min_value=0.0, max_value=2.0
+        )
+        self.live_block_bonus = self._env_float(
+            "WHISK_BOT_LIVE_BLOCK_BONUS", 0.34, min_value=0.0, max_value=3.0
+        )
         self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 64, min_value=4, max_value=64)
         self.pending_rollouts = self._env_int("WHISK_BOT_PENDING_ROLLOUTS", 3, min_value=0, max_value=16)
         self.pending_rollout_turns = self._env_int("WHISK_BOT_PENDING_ROLLOUT_TURNS", 4, min_value=1, max_value=32)
@@ -102,38 +114,50 @@ class HumanVsAgentSession:
 
         opponent = Mark.X if bot_mark == Mark.O else Mark.O
         legal_ids = [ActionCodec.coord_to_action(*coord) for coord in legal]
+
+        if state.pending[opponent] is None:
+            must_win_ids = self._must_win_now_ids(
+                env, bot_mark, legal_ids, deadline=deadline
+            )
+            if must_win_ids:
+                scores = self._score_actions_with_priors(env, bot_mark, must_win_ids)
+                chosen_id = self._argmax_with_random_tie_break(scores)
+                return self._build_decision(chosen_id, "forced_score", scores)
+
         must_block_ids = self._must_block_imminent_five_ids(
             env, bot_mark, opponent, legal_ids, deadline=deadline
         )
         if must_block_ids:
-            priors = None
-            if self.model is not None:
-                obs = StateEncoder.encode_observation(env.state, bot_mark)
-                priors, _ = self.model.predict(obs)
-            scores = {
-                action_id: self._must_block_choice_score(
+            return self._build_must_block_decision(
+                env,
+                bot_mark,
+                opponent,
+                must_block_ids,
+                source="must_block",
+            )
+
+        if state.pending[opponent] is None:
+            high_threat_block_ids = self._must_block_high_immediate_threat_ids(
+                env,
+                bot_mark,
+                opponent,
+                legal_ids,
+                deadline=deadline,
+            )
+            if high_threat_block_ids:
+                return self._build_must_block_decision(
                     env,
                     bot_mark,
                     opponent,
-                    action_id,
-                    prior=(float(priors[action_id]) if priors is not None else 0.0),
+                    high_threat_block_ids,
+                    source="must_block",
                 )
-                for action_id in must_block_ids
-            }
-            chosen_id = self._argmax_with_random_tie_break(scores)
-            return self._build_decision(chosen_id, "must_block", scores)
 
-        if state.pending[opponent] is None:
             must_score_ids = self._must_take_high_value_score_ids(
                 env, bot_mark, opponent, legal_ids, deadline=deadline
             )
             if must_score_ids:
-                scores = {action_id: 0.0 for action_id in must_score_ids}
-                if self.model is not None:
-                    obs = StateEncoder.encode_observation(env.state, bot_mark)
-                    priors, _ = self.model.predict(obs)
-                    for action_id in must_score_ids:
-                        scores[action_id] = float(priors[action_id])
+                scores = self._score_actions_with_priors(env, bot_mark, must_score_ids)
                 chosen_id = self._argmax_with_random_tie_break(scores)
                 return self._build_decision(chosen_id, "forced_score", scores)
 
@@ -192,7 +216,14 @@ class HumanVsAgentSession:
                     if urgent_state or (env.state.turn >= 10 and mcts_spread <= self.flat_score_tie_tol):
                         return tactical_decision
 
-                chosen_id = self._sample_action_from_scores(scores)
+                scores, force_greedy = self._filter_live_mcts_scores(
+                    env,
+                    bot_mark,
+                    opponent,
+                    scores,
+                    deadline=deadline,
+                )
+                chosen_id = self._sample_action_from_scores(scores, force_greedy=force_greedy)
                 return self._build_decision(chosen_id, "mcts", scores)
 
         row, col = self.greedy.select_action(env, bot_mark, self.rng)
@@ -252,6 +283,104 @@ class HumanVsAgentSession:
         if not legal:
             return 0
         return sum(1 for coord in legal if self._immediate_move_score(env, mark, coord) > 0)
+
+    def _score_actions_with_priors(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        action_ids: List[int],
+    ) -> Dict[int, float]:
+        scores = {action_id: 0.0 for action_id in action_ids}
+        if self.model is None or not action_ids:
+            return scores
+
+        obs = StateEncoder.encode_observation(env.state, bot_mark)
+        priors, _ = self.model.predict(obs)
+        for action_id in action_ids:
+            scores[action_id] = float(priors[action_id])
+        return scores
+
+    def _build_must_block_decision(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        candidate_ids: List[int],
+        source: str,
+    ) -> BotDecision:
+        prior_scores = self._score_actions_with_priors(env, bot_mark, candidate_ids)
+        scores = {
+            action_id: self._must_block_choice_score(
+                env,
+                bot_mark,
+                opponent,
+                action_id,
+                prior=prior_scores.get(action_id, 0.0),
+            )
+            for action_id in candidate_ids
+        }
+        chosen_id = self._argmax_with_random_tie_break(scores)
+        return self._build_decision(chosen_id, source, scores)
+
+    def _must_win_now_ids(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        legal_ids: List[int],
+        deadline: float | None = None,
+    ) -> List[int]:
+        bot_score_now = int(env.state.scores[bot_mark])
+        winning_ids: List[int] = []
+        for action_id in legal_ids:
+            if deadline is not None and time.perf_counter() >= deadline and winning_ids:
+                break
+            action = ActionCodec.action_to_coord(action_id)
+            own_now = self._immediate_move_score(env, bot_mark, action)
+            if own_now >= 9 or (bot_score_now + own_now >= 50):
+                winning_ids.append(action_id)
+        return winning_ids
+
+    def _must_block_high_immediate_threat_ids(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        legal_ids: List[int],
+        deadline: float | None = None,
+    ) -> List[int]:
+        opp_score_now = int(env.state.scores[opponent])
+        threat_floor = (
+            self.defense_lock_min_threat
+            if self._is_defense_lock_active(opp_score_now, self.defense_lock_min_threat)
+            else self.high_immediate_block_threat
+        )
+
+        threat_coords = {
+            coord
+            for coord in env.legal_actions(opponent)
+            if self._immediate_move_score(env, opponent, coord) >= threat_floor
+        }
+        if not threat_coords:
+            return []
+
+        block_ids: List[int] = []
+        for action_id in legal_ids:
+            if deadline is not None and time.perf_counter() >= deadline and block_ids:
+                break
+            if ActionCodec.action_to_coord(action_id) in threat_coords:
+                block_ids.append(action_id)
+
+        if not block_ids:
+            return []
+
+        filtered: List[int] = []
+        for action_id in block_ids:
+            coord = ActionCodec.action_to_coord(action_id)
+            threat = self._immediate_move_score(env, opponent, coord)
+            if threat >= 9 or (opp_score_now + threat >= 50):
+                continue
+            filtered.append(action_id)
+        return filtered or block_ids
 
     def _must_take_high_value_score_ids(
         self,
@@ -1086,7 +1215,111 @@ class HumanVsAgentSession:
             ],
         )
 
-    def _sample_action_from_scores(self, scores: Dict[int, float]) -> int:
+    def _opponent_immediate_threat_coords(
+        self,
+        env: WhiskEnv,
+        opponent: Mark,
+        min_score: int,
+    ) -> set[Coord]:
+        min_score = max(1, int(min_score))
+        return {
+            coord
+            for coord in env.legal_actions(opponent)
+            if self._immediate_move_score(env, opponent, coord) >= min_score
+        }
+
+    def _opponent_threat_after_live_move(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        action_id: int,
+    ) -> tuple[int, int]:
+        action = ActionCodec.action_to_coord(action_id)
+        sim_env = env.clone()
+        try:
+            sim_env.reserve_move(bot_mark, action)
+        except Exception:
+            return (9, 50)
+        return (self._max_immediate_score(sim_env, opponent), int(sim_env.state.scores[opponent]))
+
+    def _filter_live_mcts_scores(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        scores: Dict[int, float],
+        deadline: float | None = None,
+    ) -> tuple[Dict[int, float], bool]:
+        if not scores:
+            return scores, False
+
+        opp_score_now = int(env.state.scores[opponent])
+        opp_threat_now = self._max_immediate_score(env, opponent)
+        defense_pressure = (
+            self._is_defense_lock_active(opp_score_now, opp_threat_now)
+            or opp_score_now + opp_threat_now >= 50
+            or opp_threat_now >= self.high_immediate_block_threat
+        )
+        threat_floor = self.defense_lock_min_threat if defense_pressure else self.high_immediate_block_threat
+        threat_coords = self._opponent_immediate_threat_coords(env, opponent, min_score=threat_floor)
+
+        adjusted: Dict[int, float] = {}
+        metadata: Dict[int, tuple[bool, bool, int]] = {}
+        for action_id, base_score in scores.items():
+            action = ActionCodec.action_to_coord(action_id)
+            own_now = self._immediate_move_score(env, bot_mark, action)
+            line_support = self._line_support_score(env.state, bot_mark, action)
+            neighbor_support = self._neighbor_support_score(env.state, bot_mark, action)
+            blocks_threat = action in threat_coords
+            cohesive = line_support >= 0.25 or neighbor_support >= 0.34
+
+            adjusted_score = float(base_score)
+            adjusted_score += self.live_cohesion_bonus * ((0.65 * line_support) + (0.35 * neighbor_support))
+            if blocks_threat:
+                adjusted_score += self.live_block_bonus
+            if own_now >= 4:
+                adjusted_score += 0.20
+            if not blocks_threat and not cohesive and own_now < 4:
+                pressure_multiplier = 1.4 if defense_pressure else 1.0
+                adjusted_score -= self.live_isolation_penalty * pressure_multiplier
+
+            adjusted[action_id] = adjusted_score
+            metadata[action_id] = (blocks_threat, cohesive, own_now)
+
+        if defense_pressure:
+            defensive_ids: List[int] = []
+            for action_id, (blocks_threat, _, own_now) in metadata.items():
+                if own_now >= 9 or blocks_threat:
+                    defensive_ids.append(action_id)
+                    continue
+                if deadline is not None and time.perf_counter() >= deadline and defensive_ids:
+                    break
+                opp_threat_after, _ = self._opponent_threat_after_live_move(
+                    env,
+                    bot_mark,
+                    opponent,
+                    action_id,
+                )
+                if opp_threat_after < opp_threat_now:
+                    defensive_ids.append(action_id)
+
+            if defensive_ids:
+                adjusted = {action_id: adjusted[action_id] for action_id in defensive_ids}
+
+            cohesive_ids = [
+                action_id
+                for action_id, (blocks_threat, cohesive, own_now) in metadata.items()
+                if action_id in adjusted and (blocks_threat or cohesive or own_now >= 4)
+            ]
+            if cohesive_ids:
+                adjusted = {action_id: adjusted[action_id] for action_id in cohesive_ids}
+
+            return adjusted or scores, True
+
+        return adjusted, False
+
+    def _sample_action_from_scores(self, scores: Dict[int, float], force_greedy: bool = False) -> int:
         ranked = sorted(
             scores.items(),
             key=lambda kv: (
@@ -1106,7 +1339,7 @@ class HumanVsAgentSession:
             return shortlist[0]
 
         spread = float(ranked[0][1] - ranked[shortlist_size - 1][1])
-        if spread <= self.flat_score_tie_tol:
+        if force_greedy or spread <= self.flat_score_tie_tol:
             # Flat score surfaces should not devolve into pseudo-random endgame moves.
             return shortlist[0]
 
