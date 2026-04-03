@@ -68,6 +68,54 @@ class HumanVsAgentSession:
         self.live_block_bonus = self._env_float(
             "WHISK_BOT_LIVE_BLOCK_BONUS", 0.34, min_value=0.0, max_value=3.0
         )
+        self.policy_w_immediate = self._env_float(
+            "WHISK_BOT_POLICY_W_IMMEDIATE", 1.15, min_value=0.0, max_value=5.0
+        )
+        self.policy_w_block_gain = self._env_float(
+            "WHISK_BOT_POLICY_W_BLOCK_GAIN", 1.20, min_value=0.0, max_value=5.0
+        )
+        self.policy_w_threat_creation = self._env_float(
+            "WHISK_BOT_POLICY_W_THREAT_CREATION", 0.40, min_value=0.0, max_value=5.0
+        )
+        self.policy_w_line = self._env_float(
+            "WHISK_BOT_POLICY_W_LINE", 0.48, min_value=0.0, max_value=5.0
+        )
+        self.policy_w_neighbor = self._env_float(
+            "WHISK_BOT_POLICY_W_NEIGHBOR", 0.26, min_value=0.0, max_value=5.0
+        )
+        self.policy_w_center = self._env_float(
+            "WHISK_BOT_POLICY_W_CENTER", 0.08, min_value=0.0, max_value=2.0
+        )
+        self.policy_w_opp_threat = self._env_float(
+            "WHISK_BOT_POLICY_W_OPP_THREAT", 1.30, min_value=0.0, max_value=5.0
+        )
+        self.policy_bonus_win_now = self._env_float(
+            "WHISK_BOT_POLICY_BONUS_WIN_NOW", 3.20, min_value=0.0, max_value=8.0
+        )
+        self.policy_bonus_block_win = self._env_float(
+            "WHISK_BOT_POLICY_BONUS_BLOCK_WIN", 2.60, min_value=0.0, max_value=8.0
+        )
+        self.policy_bonus_block_high = self._env_float(
+            "WHISK_BOT_POLICY_BONUS_BLOCK_HIGH", 1.40, min_value=0.0, max_value=8.0
+        )
+        self.policy_bonus_fork = self._env_float(
+            "WHISK_BOT_POLICY_BONUS_FORK", 0.70, min_value=0.0, max_value=5.0
+        )
+        self.policy_penalty_isolation = self._env_float(
+            "WHISK_BOT_POLICY_PENALTY_ISOLATION", 1.10, min_value=0.0, max_value=8.0
+        )
+        self.policy_penalty_aging = self._env_float(
+            "WHISK_BOT_POLICY_PENALTY_AGING", 0.70, min_value=0.0, max_value=8.0
+        )
+        self.policy_penalty_opp_scoring_density = self._env_float(
+            "WHISK_BOT_POLICY_PENALTY_OPP_SCORING_DENSITY", 0.65, min_value=0.0, max_value=8.0
+        )
+        self.policy_endgame_defense_boost = self._env_float(
+            "WHISK_BOT_POLICY_ENDGAME_DEFENSE_BOOST", 1.35, min_value=0.0, max_value=4.0
+        )
+        self.policy_fork_min_scoring_moves = self._env_int(
+            "WHISK_BOT_POLICY_FORK_MIN_SCORING_MOVES", 2, min_value=1, max_value=8
+        )
         self.pending_eval_top_k = self._env_int("WHISK_BOT_PENDING_EVAL_TOP_K", 64, min_value=4, max_value=64)
         self.pending_rollouts = self._env_int("WHISK_BOT_PENDING_ROLLOUTS", 3, min_value=0, max_value=16)
         self.pending_rollout_turns = self._env_int("WHISK_BOT_PENDING_ROLLOUT_TURNS", 4, min_value=1, max_value=32)
@@ -465,57 +513,23 @@ class HumanVsAgentSession:
         ):
             return None
 
+        defense_mode = (
+            defense_lock_active
+            or (opp_score_now + opp_threat_before >= 50)
+            or opp_score_now >= self.defense_lock_score
+        )
         scores: Dict[int, float] = {}
         for action_id in legal_ids:
             if deadline is not None and time.perf_counter() >= deadline:
                 break
-            action = ActionCodec.action_to_coord(action_id)
-            sim_env = env.clone()
-            try:
-                sim_env.reserve_move(bot_mark, action)
-            except Exception:
-                continue
-
-            own_now = self._immediate_move_score(env, bot_mark, action)
-            opp_threat_after = self._max_immediate_score(sim_env, opponent)
-            bot_threat_after = self._max_immediate_score(sim_env, bot_mark)
-
-            own_now_norm = min(9, own_now) / 9.0
-            opp_future_norm = min(9, opp_threat_after) / 9.0
-            bot_future_norm = min(9, bot_threat_after) / 9.0
-            block_gain = max(0.0, (min(9, opp_threat_before) - min(9, opp_threat_after)) / 9.0)
-            line_support = self._line_support_score(env.state, bot_mark, action)
-            neighbor_support = self._neighbor_support_score(env.state, bot_mark, action)
-            center = self._center_bias(action)
-
-            own_finish = bot_score_now + own_now >= 50
-            high_risk = opp_score_now >= 40 and opp_threat_after >= 4
-            defense_lock_risk = self._is_defense_lock_active(opp_score_now, opp_threat_after)
-            win_risk = opp_score_now + opp_threat_after >= 50
-
-            score = (
-                (1.20 * own_now_norm)
-                + (1.00 * block_gain)
-                + (0.30 * bot_future_norm)
-                + (0.38 * line_support)
-                + (0.18 * neighbor_support)
-                + (0.08 * center)
-                - (1.10 * opp_future_norm)
+            scores[action_id] = self._policy_move_utility(
+                env,
+                bot_mark,
+                opponent,
+                action_id,
+                base_score=0.0,
+                defense_mode=defense_mode,
             )
-            if opp_threat_after >= 9:
-                score -= 1.55
-            if high_risk:
-                score -= 1.20
-            if win_risk:
-                score -= 2.40
-            elif defense_lock_risk:
-                score -= 1.35
-            if own_now >= 4:
-                score += 0.60
-            if own_finish:
-                score += 2.40
-
-            scores[action_id] = score
 
         if not scores:
             return None
@@ -1198,6 +1212,130 @@ class HumanVsAgentSession:
         lead = max(0.0, min(1.0, (opp_score - bot_score) / 20.0))
         return min(1.0, (0.65 * near_goal) + (0.35 * lead))
 
+    def _best_existing_line_support(self, state: GameState, mark: Mark) -> float:
+        if not state.pieces[mark]:
+            return 0.0
+        return max(
+            self._line_support_score(state, mark, (piece.row, piece.col))
+            for piece in state.pieces[mark]
+        )
+
+    def _policy_move_features(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        action_id: int,
+    ) -> Optional[Dict[str, float]]:
+        action = ActionCodec.action_to_coord(action_id)
+        opp_score_now = int(env.state.scores[opponent])
+        bot_score_now = int(env.state.scores[bot_mark])
+        opp_threat_before = self._max_immediate_score(env, opponent)
+
+        sim_env = env.clone()
+        try:
+            sim_env.reserve_move(bot_mark, action)
+        except Exception:
+            return None
+
+        own_now = self._immediate_move_score(env, bot_mark, action)
+        own_win_now = 1.0 if (own_now >= 9 or (bot_score_now + own_now >= 50)) else 0.0
+
+        opp_threat_after = self._max_immediate_score(sim_env, opponent)
+        bot_threat_after = self._max_immediate_score(sim_env, bot_mark)
+        block_gain = max(0.0, (min(9, opp_threat_before) - min(9, opp_threat_after)) / 9.0)
+
+        blocks_opp_win_now = 1.0 if (
+            (opp_score_now + opp_threat_before >= 50)
+            and (opp_score_now + opp_threat_after < 50)
+        ) else 0.0
+        blocks_high_threat = 1.0 if (
+            opp_threat_before >= self.high_immediate_block_threat
+            and opp_threat_after < opp_threat_before
+        ) else 0.0
+
+        line_support = self._line_support_score(env.state, bot_mark, action)
+        neighbor_support = self._neighbor_support_score(env.state, bot_mark, action)
+        cohesive_support = (0.65 * line_support) + (0.35 * neighbor_support)
+
+        opp_scoring_moves = self._count_immediate_scoring_moves(sim_env, opponent)
+        opp_legal_count = max(1, len(sim_env.legal_actions(opponent)))
+        opp_scoring_density = min(1.0, opp_scoring_moves / float(opp_legal_count))
+
+        bot_scoring_moves = self._count_immediate_scoring_moves(sim_env, bot_mark)
+        fork_ready = 1.0 if bot_scoring_moves >= self.policy_fork_min_scoring_moves else 0.0
+
+        tactical_block = (blocks_opp_win_now >= 0.5) or (blocks_high_threat >= 0.5) or (block_gain > 0.0)
+        isolated_non_tactical = 1.0 if (
+            line_support < 0.25
+            and neighbor_support < 0.34
+            and own_now < 4
+            and not tactical_block
+        ) else 0.0
+
+        pre_structure = self._best_existing_line_support(env.state, bot_mark)
+        post_structure = self._best_existing_line_support(sim_env.state, bot_mark)
+        aging_drop = max(0.0, pre_structure - post_structure)
+        if tactical_block or own_now >= 4:
+            aging_drop = 0.0
+
+        return {
+            "own_now": float(own_now),
+            "own_now_norm": min(9, own_now) / 9.0,
+            "own_win_now": own_win_now,
+            "opp_threat_before": float(opp_threat_before),
+            "opp_threat_after": float(opp_threat_after),
+            "opp_future_norm": min(9, opp_threat_after) / 9.0,
+            "bot_future_norm": min(9, bot_threat_after) / 9.0,
+            "block_gain": block_gain,
+            "blocks_opp_win_now": blocks_opp_win_now,
+            "blocks_high_threat": blocks_high_threat,
+            "line_support": line_support,
+            "neighbor_support": neighbor_support,
+            "cohesive_support": cohesive_support,
+            "opp_scoring_density": opp_scoring_density,
+            "fork_ready": fork_ready,
+            "isolated_non_tactical": isolated_non_tactical,
+            "aging_drop": aging_drop,
+            "defense_urgency": self._defense_urgency(env.state, bot_mark, opponent),
+            "center": self._center_bias(action),
+        }
+
+    def _policy_move_utility(
+        self,
+        env: WhiskEnv,
+        bot_mark: Mark,
+        opponent: Mark,
+        action_id: int,
+        base_score: float,
+        defense_mode: bool,
+    ) -> float:
+        features = self._policy_move_features(env, bot_mark, opponent, action_id)
+        if features is None:
+            return -1e9
+
+        defense_multiplier = 1.0 + (features["defense_urgency"] * self.policy_endgame_defense_boost)
+        if defense_mode:
+            defense_multiplier += 0.35
+
+        return (
+            float(base_score)
+            + (self.policy_w_immediate * features["own_now_norm"])
+            + (self.policy_w_block_gain * defense_multiplier * features["block_gain"])
+            + (self.policy_w_threat_creation * features["bot_future_norm"])
+            + (self.policy_w_line * features["line_support"])
+            + (self.policy_w_neighbor * features["neighbor_support"])
+            + (self.policy_w_center * features["center"])
+            - (self.policy_w_opp_threat * defense_multiplier * features["opp_future_norm"])
+            + (self.policy_bonus_win_now * features["own_win_now"])
+            + (self.policy_bonus_block_win * defense_multiplier * features["blocks_opp_win_now"])
+            + (self.policy_bonus_block_high * defense_multiplier * features["blocks_high_threat"])
+            + (self.policy_bonus_fork * features["fork_ready"])
+            - (self.policy_penalty_isolation * defense_multiplier * features["isolated_non_tactical"])
+            - (self.policy_penalty_aging * features["aging_drop"])
+            - (self.policy_penalty_opp_scoring_density * defense_multiplier * features["opp_scoring_density"])
+        )
+
     def _build_decision(self, chosen_id: int, source: str, scores: Dict[int, float]) -> BotDecision:
         chosen_row, chosen_col = ActionCodec.action_to_coord(chosen_id)
         top = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:3]
@@ -1261,59 +1399,49 @@ class HumanVsAgentSession:
             or opp_score_now + opp_threat_now >= 50
             or opp_threat_now >= self.high_immediate_block_threat
         )
-        threat_floor = self.defense_lock_min_threat if defense_pressure else self.high_immediate_block_threat
-        threat_coords = self._opponent_immediate_threat_coords(env, opponent, min_score=threat_floor)
 
         adjusted: Dict[int, float] = {}
-        metadata: Dict[int, tuple[bool, bool, int]] = {}
+        metadata: Dict[int, Dict[str, float]] = {}
         for action_id, base_score in scores.items():
-            action = ActionCodec.action_to_coord(action_id)
-            own_now = self._immediate_move_score(env, bot_mark, action)
-            line_support = self._line_support_score(env.state, bot_mark, action)
-            neighbor_support = self._neighbor_support_score(env.state, bot_mark, action)
-            blocks_threat = action in threat_coords
-            cohesive = line_support >= 0.25 or neighbor_support >= 0.34
+            if deadline is not None and time.perf_counter() >= deadline and adjusted:
+                break
+            features = self._policy_move_features(env, bot_mark, opponent, action_id)
+            if features is None:
+                continue
+            adjusted[action_id] = self._policy_move_utility(
+                env,
+                bot_mark,
+                opponent,
+                action_id,
+                base_score=float(base_score),
+                defense_mode=defense_pressure,
+            )
+            metadata[action_id] = features
 
-            adjusted_score = float(base_score)
-            adjusted_score += self.live_cohesion_bonus * ((0.65 * line_support) + (0.35 * neighbor_support))
-            if blocks_threat:
-                adjusted_score += self.live_block_bonus
-            if own_now >= 4:
-                adjusted_score += 0.20
-            if not blocks_threat and not cohesive and own_now < 4:
-                pressure_multiplier = 1.4 if defense_pressure else 1.0
-                adjusted_score -= self.live_isolation_penalty * pressure_multiplier
-
-            adjusted[action_id] = adjusted_score
-            metadata[action_id] = (blocks_threat, cohesive, own_now)
+        if not adjusted:
+            return scores, False
 
         if defense_pressure:
-            defensive_ids: List[int] = []
-            for action_id, (blocks_threat, _, own_now) in metadata.items():
-                if own_now >= 9 or blocks_threat:
-                    defensive_ids.append(action_id)
-                    continue
-                if deadline is not None and time.perf_counter() >= deadline and defensive_ids:
-                    break
-                opp_threat_after, _ = self._opponent_threat_after_live_move(
-                    env,
-                    bot_mark,
-                    opponent,
-                    action_id,
+            defensive_ids = [
+                action_id
+                for action_id, features in metadata.items()
+                if (
+                    features["own_win_now"] >= 0.5
+                    or features["blocks_opp_win_now"] >= 0.5
+                    or features["blocks_high_threat"] >= 0.5
+                    or features["opp_threat_after"] < features["opp_threat_before"]
                 )
-                if opp_threat_after < opp_threat_now:
-                    defensive_ids.append(action_id)
-
+            ]
             if defensive_ids:
                 adjusted = {action_id: adjusted[action_id] for action_id in defensive_ids}
 
-            cohesive_ids = [
+            non_isolated_ids = [
                 action_id
-                for action_id, (blocks_threat, cohesive, own_now) in metadata.items()
-                if action_id in adjusted and (blocks_threat or cohesive or own_now >= 4)
+                for action_id, features in metadata.items()
+                if action_id in adjusted and features["isolated_non_tactical"] < 0.5
             ]
-            if cohesive_ids:
-                adjusted = {action_id: adjusted[action_id] for action_id in cohesive_ids}
+            if non_isolated_ids:
+                adjusted = {action_id: adjusted[action_id] for action_id in non_isolated_ids}
 
             return adjusted or scores, True
 

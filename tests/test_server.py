@@ -1122,6 +1122,56 @@ def test_human_adapter_ladder_blocks_high_threat_before_own_forced_score(tmp_pat
     assert decision.source == "must_block"
 
 
+def test_policy_move_utility_prefers_block_over_isolated_when_threatened(tmp_path: Path):
+    # Concrete weighted-policy check: blocking a high threat should outscore an isolated move.
+    state = GameState(turn=14)
+    for i, col in enumerate((0, 1, 2), start=1):
+        state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=col, turn_placed=i))
+    for i, (row, col) in enumerate(((3, 3), (4, 4), (5, 3), (2, 4), (4, 2)), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=row, col=col, turn_placed=i))
+
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=59)
+
+    block_id = ActionCodec.coord_to_action(0, 3)
+    isolated_id = ActionCodec.coord_to_action(7, 7)
+    block_score = bot._policy_move_utility(env, Mark.X, Mark.O, block_id, base_score=0.0, defense_mode=True)
+    isolated_score = bot._policy_move_utility(env, Mark.X, Mark.O, isolated_id, base_score=0.0, defense_mode=True)
+
+    assert block_score > isolated_score
+
+
+def test_policy_move_utility_endgame_prefers_block_to_nonwinning_score(tmp_path: Path):
+    # Near goal, defense boost should favor blocking opponent's near-win over a non-winning score gain.
+    state = GameState(turn=16)
+    state.scores[Mark.O] = 48
+    state.scores[Mark.X] = 20
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=0, turn_placed=1))
+    state.pieces[Mark.O].append(Piece(mark=Mark.O, row=0, col=1, turn_placed=2))
+    for i, col in enumerate((1, 0), start=1):
+        state.pieces[Mark.X].append(Piece(mark=Mark.X, row=1, col=col, turn_placed=i))
+
+    from backend.app.agents.env import WhiskEnv
+
+    env = WhiskEnv(mode="remote")
+    env.state = state
+
+    missing_ckpt = tmp_path / "missing_model.pkl"
+    bot = HumanVsAgentSession(checkpoint_path=missing_ckpt, seed=61)
+
+    block_id = ActionCodec.coord_to_action(0, 2)
+    score_id = ActionCodec.coord_to_action(1, 1)
+    block_score = bot._policy_move_utility(env, Mark.X, Mark.O, block_id, base_score=0.0, defense_mode=True)
+    score_move_score = bot._policy_move_utility(env, Mark.X, Mark.O, score_id, base_score=0.0, defense_mode=True)
+
+    assert block_score > score_move_score
+
+
 def test_human_adapter_mcts_flat_policy_prefers_cohesive_move(monkeypatch, tmp_path: Path):
     # Regression: when MCTS surface is flat, the bot should avoid isolated "random" placements.
     state = GameState(turn=14)
