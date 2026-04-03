@@ -828,6 +828,8 @@ function render() {
     cell.textContent = '';
     cell.style.color = '';
     cell.style.backgroundColor = '';
+    const existingMark = cell.querySelector('.cell-mark');
+    if (existingMark) existingMark.remove();
     cell.disabled = false;
   });
 
@@ -837,8 +839,11 @@ function render() {
     const cell = cells[idx];
     if (!cell) continue;
 
-    cell.textContent = p.mark;
-    cell.style.color = markColor(p.mark, p.age_rank);
+    const markEl = document.createElement('span');
+    markEl.className = 'cell-mark';
+    markEl.textContent = p.mark;
+    markEl.style.color = markColor(p.mark, p.age_rank);
+    cell.appendChild(markEl);
     const highlightKey = `${p.row},${p.col}`;
     if (highlightedCells.has(highlightKey)) {
       cell.style.backgroundColor = HIGHLIGHT_COLOR;
