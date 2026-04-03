@@ -1,5 +1,6 @@
 :root {
   --bg-a: #fff7b0;
+  --board-max: 560px;
   --bg-b: #ffd8a8;
   --card: #ffffff;
   --text: #2a1f1b;
@@ -135,9 +136,9 @@ input {
   margin: 0 12px;
 }
 
-@media (min-width: 860px) {
+@media (min-width: 980px) {
   .top-row {
-    grid-template-columns: 320px 1fr;
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
     align-items: start;
   }
 }
@@ -229,9 +230,10 @@ input {
 
 .board {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 6px;
-  width: min(560px, calc(100vw - 44px));
+  width: min(100%, var(--board-max));
+  max-width: 100%;
   margin: 0 auto;
   padding: 8px;
   background: var(--board-gap);
@@ -240,7 +242,29 @@ input {
 }
 
 #boardCard {
-  margin: 10px 0;
+  margin: 10px auto;
+}
+
+@media (min-width: 900px) and (max-width: 1366px) and (orientation: landscape) {
+  #boardCard {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 12px;
+    align-items: start;
+    justify-content: center;
+  }
+
+  #boardCard .board-controls {
+    width: auto;
+    max-width: none;
+    margin: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #boardCard .board {
+    margin: 0;
+  }
 }
 
 .cell {
@@ -267,7 +291,8 @@ input {
   gap: 8px;
   justify-content: flex-start;
   margin: 0 auto 10px;
-  width: min(560px, calc(100vw - 44px));
+  width: min(100%, var(--board-max));
+  max-width: 100%;
 }
 
 .celebration {
@@ -376,9 +401,17 @@ input {
   font-size: 16px;
 }
 
+@media (max-width: 1024px) {
+  :root { --board-max: 520px; }
+}
+
+@media (max-width: 820px) {
+  :root { --board-max: 480px; }
+}
+
 @media (max-width: 640px) {
   body { padding-bottom: 108px; }
   .card { margin: 8px; padding: 12px; }
-  .board { width: calc(100vw - 24px); gap: 4px; padding: 6px; }
-  .board-controls { width: calc(100vw - 24px); }
+  .board { gap: 4px; padding: 6px; }
+  .board-controls { width: 100%; }
 }
