@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from backend.app.agents.encoding import StateEncoder
 from backend.app.agents.env import WhiskEnv
@@ -48,3 +49,24 @@ def test_trainer_smoke_saves_checkpoint(tmp_path: Path):
     assert summary["iterations"] == 1
     assert summary["examples_last_iteration"] >= 0
     assert 0.0 <= summary["best_win_rate_vs_random"] <= 1.0
+
+
+def test_evaluate_vs_random_runs_both_seatings(monkeypatch):
+    from backend.app.agents import train as train_mod
+
+    calls = []
+
+    def _fake_run(self, agent_o, agent_x, games, seed=0):
+        calls.append((agent_o.name, agent_x.name, games, seed))
+        if agent_o.name == "mcts_model":
+            return SimpleNamespace(games=games, wins_o=games, wins_x=0, ties=0)
+        return SimpleNamespace(games=games, wins_o=0, wins_x=games, ties=0)
+
+    monkeypatch.setattr(train_mod.Arena, "run", _fake_run)
+    trainer = Trainer(TrainConfig(eval_games=5, selfplay_simulations=8))
+    score = trainer.evaluate_vs_random(WhiskPolicyValueModel(), seed=123)
+
+    assert len(calls) == 2
+    assert calls[0][0] == "mcts_model" and calls[0][1] == "random"
+    assert calls[1][0] == "random" and calls[1][1] == "mcts_model"
+    assert score == 1.0

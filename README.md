@@ -86,6 +86,35 @@ From the repo root:
 pytest -q
 ```
 
+### Interruption-Safe Managed Training Session
+
+For long runs that must survive laptop sleep/interruptions, use managed-session mode:
+
+```bash
+python scripts/run_train.py \
+  --managed-session \
+  --session-file artifacts/checkpoints/long_run.session.json \
+  --target-total-iterations 400 \
+  --max-iterations-per-run 10 \
+  --iterations 10 \
+  --games-per-iteration 12 \
+  --selfplay-simulations 28 \
+  --out artifacts/checkpoints/m6_best.pkl \
+  --replay artifacts/checkpoints/replay_buffer.pkl
+```
+
+Then restart anytime with one short command; it reloads the same parameters and resumes at the next generation:
+
+```bash
+python scripts/run_train.py --managed-session --session-file artifacts/checkpoints/long_run.session.json
+```
+
+Each launch prints an immediate `[train-runner] boot ...` status line, then a managed-session status line showing completed generations and what this run will execute.
+
+To add a stronger non-random benchmark track in logs, include: `--benchmark-games 24 --benchmark-simulations 112 --benchmark-anchor-gap 24`.
+
+When enabled, per-generation logs add `candidate_vs_anchor`, `best_vs_anchor`, and `anchor_gen`.
+
 ### Focused Endgame-Defense Training Pass
 
 Run a short, high-signal tuning pass before a long training run:

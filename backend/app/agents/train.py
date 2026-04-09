@@ -47,6 +47,10 @@ class TrainConfig:
     seed: int = 0
     resume: bool = False
     progress: bool = False
+    # Optional stronger benchmark track to avoid random-opponent saturation.
+    benchmark_games: int = 0
+    benchmark_simulations: int = 96
+    benchmark_anchor_gap: int = 24
 
 
 class ModelAgent:
@@ -85,6 +89,43 @@ class Trainer:
         if self.config.progress:
             print(message, flush=True)
 
+    def _candidate_eval_simulations(self) -> int:
+        return max(8, self.config.selfplay_simulations // 2)
+
+    def _benchmark_eval_simulations(self) -> int:
+        return max(self._candidate_eval_simulations(), self.config.benchmark_simulations)
+
+    def _select_benchmark_anchor(
+        self,
+        *,
+        manifest: List[Dict[str, object]],
+        start_generation: int,
+    ) -> tuple[int, WhiskPolicyValueModel]:
+        if not manifest:
+            return (0, self.best_model.copy())
+
+        anchor_ceiling = max(0, start_generation - max(0, self.config.benchmark_anchor_gap))
+
+        candidates = [
+            rec
+            for rec in manifest
+            if rec.get("promoted") and int(rec.get("generation", 0)) <= anchor_ceiling
+        ]
+        if not candidates:
+            candidates = [rec for rec in manifest if int(rec.get("generation", 0)) == 0]
+        if not candidates:
+            candidates = [rec for rec in manifest if rec.get("promoted")]
+        if not candidates:
+            return (0, self.best_model.copy())
+
+        anchor_record = max(candidates, key=lambda rec: int(rec.get("generation", 0)))
+        anchor_generation = int(anchor_record.get("generation", 0))
+        anchor_path = Path(str(anchor_record.get("path", "")))
+        if not anchor_path.exists():
+            return (anchor_generation, self.best_model.copy())
+
+        return (anchor_generation, WhiskPolicyValueModel.load(anchor_path))
+
     def train(self, checkpoint_path: Path, replay_path: Path | None = None) -> Dict[str, object]:
         if self.config.iterations <= 0:
             raise ValueError("iterations must be > 0")
@@ -92,6 +133,12 @@ class Trainer:
             raise ValueError("promotion_games must be > 0")
         if self.config.train_passes <= 0:
             raise ValueError("train_passes must be > 0")
+        if self.config.benchmark_games < 0:
+            raise ValueError("benchmark_games must be >= 0")
+        if self.config.benchmark_simulations <= 0:
+            raise ValueError("benchmark_simulations must be > 0")
+        if self.config.benchmark_anchor_gap < 0:
+            raise ValueError("benchmark_anchor_gap must be >= 0")
 
         manager = CheckpointManager(checkpoint_path.parent)
         replay_path = replay_path or (checkpoint_path.parent / "replay_buffer.pkl")
@@ -121,6 +168,29 @@ class Trainer:
                 metrics={"bootstrap": 1},
             )
             start_generation = 1
+
+        manifest = manager.load_manifest()
+        benchmark_anchor_generation = None
+        benchmark_anchor_model = None
+        best_win_rate_vs_anchor: float | None = None
+        if self.config.benchmark_games > 0:
+            benchmark_anchor_generation, benchmark_anchor_model = self._select_benchmark_anchor(
+                manifest=manifest,
+                start_generation=start_generation,
+            )
+            assert benchmark_anchor_model is not None
+            best_win_rate_vs_anchor = self.evaluate_vs_anchor(
+                self.best_model,
+                anchor_model=benchmark_anchor_model,
+                games=self.config.benchmark_games,
+                seed=self.config.seed + 1111,
+            )
+            self._log(
+                f"[train] benchmark anchor gen={benchmark_anchor_generation}; "
+                f"games={self.config.benchmark_games}; "
+                f"anchor_sims={self._benchmark_eval_simulations()}; "
+                f"best_vs_anchor={best_win_rate_vs_anchor:.3f}"
+            )
 
         end_generation = start_generation + self.config.iterations - 1
         overall_start = time.perf_counter()
@@ -186,6 +256,15 @@ class Trainer:
                 seed=gen_seed + 3000,
             )
 
+            candidate_vs_anchor = None
+            if self.config.benchmark_games > 0 and benchmark_anchor_model is not None:
+                candidate_vs_anchor = self.evaluate_vs_anchor(
+                    candidate_model,
+                    anchor_model=benchmark_anchor_model,
+                    games=self.config.benchmark_games,
+                    seed=gen_seed + 3500,
+                )
+
             metrics = {
                 "candidate_win_rate_vs_best": head_to_head["candidate_win_rate"],
                 "candidate_wins": head_to_head["candidate_wins"],
@@ -195,12 +274,17 @@ class Trainer:
                 "examples": latest_examples,
                 "replay_size": len(replay.items),
             }
+            if candidate_vs_anchor is not None:
+                metrics["candidate_win_rate_vs_anchor"] = candidate_vs_anchor
+                metrics["benchmark_anchor_generation"] = int(benchmark_anchor_generation or 0)
 
             if promoted:
                 self.best_model = candidate_model
                 if generation not in promoted_generations:
                     promoted_generations.append(generation)
                 best_win_rate_vs_random = max(best_win_rate_vs_random, candidate_random)
+                if candidate_vs_anchor is not None:
+                    best_win_rate_vs_anchor = candidate_vs_anchor
                 manager.save_generation(
                     model=self.best_model,
                     generation=generation,
@@ -226,10 +310,19 @@ class Trainer:
                 f"[train] progress: {done_count}/{self.config.iterations} iterations "
                 f"({pct_complete:.1f}% complete)"
             )
+
+            anchor_fragment = ""
+            if candidate_vs_anchor is not None and best_win_rate_vs_anchor is not None:
+                anchor_fragment = (
+                    f"; candidate_vs_anchor={candidate_vs_anchor:.3f}; "
+                    f"best_vs_anchor={best_win_rate_vs_anchor:.3f}; "
+                    f"anchor_gen={int(benchmark_anchor_generation or 0)}"
+                )
             self._log(
                 f"[train] generation {generation} done in {gen_elapsed:.1f}s; "
                 f"promoted={promoted}; candidate_vs_best={head_to_head['candidate_win_rate']:.3f}; "
-                f"replay={len(replay.items)}; ETA~{eta_sec/60:.1f}m"
+                f"candidate_vs_random={candidate_random:.3f}"
+                f"{anchor_fragment}; replay={len(replay.items)}; ETA~{eta_sec/60:.1f}m"
             )
 
         best_path = manager.best_path() or checkpoint_path
@@ -245,6 +338,10 @@ class Trainer:
             "end_generation": end_generation,
             "examples_last_iteration": latest_examples,
             "best_win_rate_vs_random": best_win_rate_vs_random,
+            "best_win_rate_vs_anchor": best_win_rate_vs_anchor,
+            "benchmark_anchor_generation": benchmark_anchor_generation,
+            "benchmark_games": self.config.benchmark_games,
+            "benchmark_simulations": self.config.benchmark_simulations,
             "checkpoint": str(checkpoint_path),
             "lineage_manifest": str(manager.manifest_path),
             "replay_path": str(replay_path),
@@ -253,58 +350,72 @@ class Trainer:
         }
 
     def evaluate_vs_random(self, model: WhiskPolicyValueModel, seed: int = 0) -> float:
-        rng = random.Random(seed)
         model_agent = ModelAgent(
             model,
-            simulations=max(8, self.config.selfplay_simulations // 2),
+            simulations=self._candidate_eval_simulations(),
             rollout_max_turns=self.config.eval_max_turns,
         )
         random_agent = RandomAgent()
+        arena = Arena(max_turns=self.config.eval_max_turns)
 
-        wins = 0
         total = self.config.eval_games
-        for game_idx in range(total):
-            env = WhiskEnv(mode="remote")
-            env.reset(seed=seed + game_idx)
+        games_as_o = total // 2
+        games_as_x = total - games_as_o
 
-            while not env.is_terminal() and env.state.turn < self.config.eval_max_turns:
-                a_o = model_agent.select_action(env, Mark.O, rng)
-                a_x = random_agent.select_action(env, Mark.X, rng)
-                if a_x == a_o:
-                    o_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
-                    x_delay = rng.uniform(POST_MIN_DELAY_SEC, POST_MAX_DELAY_SEC)
-                    if abs(o_delay - x_delay) <= POST_SIMULTANEOUS_EPSILON_SEC:
-                        first_mark = rng.choice([Mark.O, Mark.X])
-                    elif o_delay < x_delay:
-                        first_mark = Mark.O
-                    else:
-                        first_mark = Mark.X
-                    if first_mark == Mark.O:
-                        legal_x = [c for c in env.legal_actions(Mark.X) if c != a_o]
-                        if not legal_x:
-                            break
-                        a_x = rng.choice(legal_x)
-                    else:
-                        legal_o = [c for c in env.legal_actions(Mark.O) if c != a_x]
-                        if not legal_o:
-                            break
-                        a_o = rng.choice(legal_o)
+        model_wins = 0
+        games_played = 0
 
-                env.step_joint(a_o, a_x)
+        if games_as_o > 0:
+            summary_o = arena.run(model_agent, random_agent, games=games_as_o, seed=seed)
+            model_wins += summary_o.wins_o
+            games_played += summary_o.games
 
-            winner = env.winner()
-            if winner is None:
-                if env.state.scores[Mark.O] > env.state.scores[Mark.X]:
-                    winner = "O"
-                elif env.state.scores[Mark.X] > env.state.scores[Mark.O]:
-                    winner = "X"
-                else:
-                    winner = "TIE"
+        if games_as_x > 0:
+            summary_x = arena.run(random_agent, model_agent, games=games_as_x, seed=seed + 5000)
+            model_wins += summary_x.wins_x
+            games_played += summary_x.games
 
-            if winner == "O":
-                wins += 1
+        return model_wins / max(1, games_played)
 
-        return wins / max(1, total)
+    def evaluate_vs_anchor(
+        self,
+        model: WhiskPolicyValueModel,
+        anchor_model: WhiskPolicyValueModel,
+        games: int,
+        seed: int = 0,
+    ) -> float:
+        if games <= 0:
+            raise ValueError("games must be > 0")
+
+        arena = Arena(max_turns=self.config.eval_max_turns)
+        candidate_agent = ModelAgent(
+            model,
+            simulations=self._candidate_eval_simulations(),
+            rollout_max_turns=self.config.eval_max_turns,
+        )
+        anchor_agent = ModelAgent(
+            anchor_model,
+            simulations=self._benchmark_eval_simulations(),
+            rollout_max_turns=self.config.eval_max_turns,
+        )
+
+        games_as_o = games // 2
+        games_as_x = games - games_as_o
+
+        candidate_wins = 0
+        games_played = 0
+
+        if games_as_o > 0:
+            summary_o = arena.run(candidate_agent, anchor_agent, games=games_as_o, seed=seed)
+            candidate_wins += summary_o.wins_o
+            games_played += summary_o.games
+
+        if games_as_x > 0:
+            summary_x = arena.run(anchor_agent, candidate_agent, games=games_as_x, seed=seed + 5000)
+            candidate_wins += summary_x.wins_x
+            games_played += summary_x.games
+
+        return candidate_wins / max(1, games_played)
 
     def evaluate_candidate_vs_best(
         self,
@@ -320,12 +431,12 @@ class Trainer:
 
         candidate_agent = ModelAgent(
             candidate,
-            simulations=max(8, self.config.selfplay_simulations // 2),
+            simulations=self._candidate_eval_simulations(),
             rollout_max_turns=self.config.eval_max_turns,
         )
         best_agent = ModelAgent(
             best,
-            simulations=max(8, self.config.selfplay_simulations // 2),
+            simulations=self._candidate_eval_simulations(),
             rollout_max_turns=self.config.eval_max_turns,
         )
 
