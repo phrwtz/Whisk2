@@ -2,21 +2,23 @@
   "manifest": "artifacts/checkpoints/manifest.json",
   "gate": "artifacts/reports/release_gate.json",
   "gate_passed": false,
-  "generation": 30,
-  "source_checkpoint": "/Users/paulhorwitz/Desktop/Whisk2/artifacts/checkpoints/generation_030.pkl",
+  "generation": 73,
+  "source_checkpoint": "/Users/paulhorwitz/Code/Whisk2/artifacts/checkpoints/generation_073.pkl",
   "promoted_checkpoint": "artifacts/releases/whiskbot_latest.pkl",
   "manifest_record": {
-    "generation": 30,
-    "path": "artifacts/checkpoints/generation_030.pkl",
+    "generation": 73,
+    "path": "artifacts/checkpoints/generation_073.pkl",
     "promoted": true,
     "metrics": {
-      "candidate_win_rate_vs_best": 0.5625,
-      "candidate_wins": 45,
-      "best_wins": 35,
+      "candidate_win_rate_vs_best": 0.5833333333333334,
+      "candidate_wins": 7,
+      "best_wins": 5,
       "ties": 0,
       "candidate_win_rate_vs_random": 1.0,
-      "examples": 3018,
-      "replay_size": 20000
+      "examples": 830,
+      "replay_size": 20000,
+      "candidate_win_rate_vs_anchor": 0.9444444444444444,
+      "benchmark_anchor_generation": 60
     }
   }
 }
